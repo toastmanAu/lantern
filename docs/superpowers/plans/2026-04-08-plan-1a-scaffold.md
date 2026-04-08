@@ -9,14 +9,17 @@
 > 3. **Task 2 Steps 1–11** — placeholder unit tests originally used `fn placeholder()`. The workspace lints have `clippy::pedantic = warn`, which fires `clippy::missing_const_for_fn` on trivially-const-eligible no-op tests. CI in Task 6 will run `cargo clippy -- -D warnings` and fail on these. Now `const fn placeholder()`. Doc comments for `signer-secp256k1`, `signer-passkey`, `signer-ledger` also have `secp256k1_blake160` / `WitnessArgs` / `WebAuthn` / `LedgerHQ` wrapped in backticks to silence `clippy::doc_markdown`.
 > 4. **Task 1 Step 2** — `tauri = { version = "2.2", features = [] }` was removed. The empty `features = []` explicitly suppresses default features when consuming crates use `tauri = { workspace = true }`, which would cause confusing compile errors in Task 4. Now `tauri = { version = "2.2" }`.
 > 5. **Task 1 Step 4** — added a comment above the `xtask` cargo alias explaining that the `xtask` crate doesn't exist yet and the alias will fail until a later plan adds it.
+> 6. **Task 4 forced toolchain bump** — Tauri 2.10's transitive dependency tree (`darling 0.23`, `serde_with 3.18`, `time 0.3.47`, `icu_* 2.2`) requires `rustc >= 1.88`. `rust-toolchain.toml` is pinned to `channel = "1.92"` (latest stable known to work) and `workspace.package.rust-version = "1.88"`. Task 6's GitHub Actions YAML uses `dtolnay/rust-toolchain@1.92`. The "Tech Stack" line and all `1.85` references throughout this plan have been updated to `1.88+ (pinned at 1.92)`.
+> 7. **Task 4 RGBA icons** — placeholder 1x1 PNGs from a base64 blob fail Tauri's `generate_context!()` proc macro validation (needs RGBA format) AND fail the bundler (needs real `.icns` and `.ico` containers, not renamed PNGs). Task 4 Step 16 now uses `pnpm tauri icon` to generate a real placeholder set from a 1024x1024 source PNG.
+> 8. **Task 4 vite.config.ts requires `@types/node`** — `vite.config.ts` references `process.env["TAURI_DEBUG"]`, which fails `tsc --noEmit` in `pnpm build` because `@types/node` is not a default frontend dep. Task 4 Step 2 now adds `@types/node ^22.0.0` to the desktop app's devDependencies, AND splits the tsconfig into `tsconfig.json` (browser, src/**/*) + `tsconfig.node.json` (Node, vite.config.ts only) so Node globals are scoped to config files and don't leak into React components.
 >
-> All five fixes are baked into the task content below. The original commit messages on tasks 1 and 2 (already landed in the worktree) document the in-flight fixes; this errata block exists so a fresh execution from the corrected plan won't repeat the discovery loop.
+> All eight fixes are baked into the task content below. The original commit messages on tasks 1, 2, and 4 (already landed in the worktree) document the in-flight fixes; this errata block exists so a fresh execution from the corrected plan won't repeat the discovery loop.
 
 **Goal:** Stand up the empty Lantern monorepo — Cargo workspace with stub crates, Tauri 2 desktop shell, React+TS+Vite frontend, pnpm workspace, CI matrix — so that subsequent plans can start filling in the substantive code without spending time on boilerplate. The result is a buildable, installable empty Tauri app that opens a window saying "Lantern" and runs `cargo test` + `pnpm test` cleanly with zero failures.
 
 **Architecture:** Single git repo (`~/ckb-wallet`, will move to `~/lantern` if name sticks). Cargo workspace at root with stub crates under `crates/`. pnpm workspace under `apps/desktop/` and `packages/`. Tauri 2 with `apps/desktop/src-tauri/` as the shell entry point and `apps/desktop/src/` as the React frontend. CI runs cargo + pnpm + tauri build matrix on macOS, Linux glibc, Linux musl, Windows.
 
-**Tech Stack:** Rust 1.85+ (stable channel), Cargo workspace, Tauri 2, Node.js 22 LTS, pnpm 10, React 19, TypeScript 5.7, Vite 6, TanStack Router, TanStack Query, Zustand, GitHub Actions.
+**Tech Stack:** Rust 1.88+ (stable channel, pinned at 1.92 — Tauri 2.10 deps require >= 1.88), Cargo workspace, Tauri 2, Node.js 22 LTS, pnpm 10, React 19, TypeScript 5.7, Vite 6, TanStack Router, TanStack Query, Zustand, GitHub Actions.
 
 **Spec reference:** [`docs/superpowers/specs/2026-04-08-foundation-design-tauri-edition-v1.1.md`](../specs/2026-04-08-foundation-design-tauri-edition-v1.1.md) — primarily Section 12 (Stack and Repository Shape) and Section 22 (Named Rust Dependencies). This plan implements the **scaffold only** — no vault, no signing, no chain backend logic. Those land in plans 1b through 1f.
 
@@ -47,7 +50,7 @@ ckb-wallet/                                  (existing — git repo root)
 ├── .gitignore                               (existing — extend if needed)
 ├── README.md                                (existing — modify to add build instructions)
 ├── Cargo.toml                               (NEW — workspace root)
-├── rust-toolchain.toml                      (NEW — pin Rust 1.85 stable)
+├── rust-toolchain.toml                      (NEW — pin Rust 1.92 stable; min 1.88 in workspace.package)
 ├── .rustfmt.toml                            (NEW — formatting rules)
 ├── .cargo/config.toml                       (NEW — workspace cargo config)
 ├── package.json                             (NEW — pnpm workspace root)
@@ -125,7 +128,7 @@ ckb-wallet/                                  (existing — git repo root)
 ```toml
 # rust-toolchain.toml
 [toolchain]
-channel = "1.85"
+channel = "1.92"
 components = ["rustfmt", "clippy", "rust-src"]
 profile = "minimal"
 ```
@@ -169,7 +172,7 @@ default-members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 authors = ["Lantern contributors"]
 repository = "https://github.com/toastmanAu/lantern"
@@ -260,7 +263,7 @@ xtask = "run --quiet --package xtask --"
 
 Run: `rustc --version`
 
-Expected output something like: `rustc 1.85.0 (4d91de4e4 2025-02-17)` (or whatever 1.85 stable is on your machine — if rustup is installed it will auto-download).
+Expected output something like: `rustc 1.92.0` (or whatever 1.92 stable is on your machine — if rustup is installed it will auto-download from `rust-toolchain.toml`).
 
 If `cargo` is missing entirely, install rustup first: visit https://rustup.rs and follow the one-line install.
 
@@ -281,8 +284,9 @@ chore(workspace): cargo workspace root + toolchain pin
 
 Sets up the Cargo workspace skeleton with all 11 stub crate members
 declared in [workspace.members]. Stub crate directories are created in
-Task 2; running cargo here will fail until then. Pins Rust 1.85 stable
-via rust-toolchain.toml so contributors get the same compiler version.
+Task 2; running cargo here will fail until then. Pins Rust 1.92 stable
+via rust-toolchain.toml (minimum 1.88 for Tauri 2.10 deps) so contributors
+get the same compiler version.
 
 Workspace deps include the canonical async stack (tokio, async-trait,
 thiserror, tracing) and specta + tauri-specta pinned to release-candidate
@@ -832,7 +836,7 @@ Run: `cargo build`
 
 Expected: Compiles all 11 stub crates with no errors and no warnings. (`cargo build` without `--workspace` builds the `default-members` set, which excludes `apps/desktop/src-tauri` — that's correct, it's not yet created. The `apps/desktop/src-tauri` entry in `[workspace.members]` is commented out as of this plan's errata fix.)
 
-If the build fails because Rust 1.85 with edition 2024 isn't available yet, fall back to `edition = "2021"` and `rust-version = "1.84"` in `[workspace.package]` and re-run. (Edition 2024 stabilized in early 2025; check `rustc --edition help` to verify.)
+If the build fails because Rust 1.92 isn't available, run `rustup install 1.92` first or update rustup. The `rust-toolchain.toml` file should auto-trigger download on first cargo invocation. Edition 2024 requires Rust 1.85+.
 
 - [ ] **Step 14: Verify clippy is clean**
 
@@ -1696,7 +1700,7 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.92
         with:
           components: rustfmt, clippy
 
@@ -1788,7 +1792,7 @@ Open `README.md` and append a new section before the existing "Roadmap" section 
 ## Building
 
 **Prerequisites:**
-- Rust 1.85+ via [rustup](https://rustup.rs) (the `rust-toolchain.toml` will pin the version)
+- Rust 1.88+ via [rustup](https://rustup.rs) (the `rust-toolchain.toml` will pin to 1.92 stable)
 - Node.js 22 LTS (see `.nvmrc`)
 - pnpm 10+
 - On Linux: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf`
