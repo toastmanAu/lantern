@@ -1,0 +1,35 @@
+{
+  "name": "@lantern/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "echo \"no tests yet\" && exit 0",
+    "lint": "echo \"no linter yet\" && exit 0",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@lantern/extension-sdk": "workspace:*",
+    "@lantern/ui": "workspace:*",
+    "@tanstack/react-query": "^5.62.0",
+    "@tanstack/react-router": "^1.95.0",
+    "@tauri-apps/api": "^2.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@lantern/tsconfig": "workspace:*",
+    "@tanstack/router-vite-plugin": "^1.95.0",
+    "@tauri-apps/cli": "^2.2.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

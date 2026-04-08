@@ -1,0 +1,31 @@
+[package]
+name = "lantern-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Lantern desktop application — Tauri 2 shell"
+
+[lints]
+workspace = true
+
+[lib]
+name = "lantern_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+# tauri inherits the workspace's default features. Add per-feature flags here as the
+# Tauri command surface grows in plan 1f.
+tauri = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Workspace crates — empty stubs for now, real wiring lands in plan 1f
+lantern-wallet-core = { path = "../../../crates/wallet-core" }

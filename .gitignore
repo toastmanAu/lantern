@@ -47,15 +47,19 @@ secrets/
 .secrets/
 
 # --- Tauri ---
-src-tauri/target/
-src-tauri/gen/
-src-tauri/icons/  # Generated from tauri icon command
+**/src-tauri/target/
+**/src-tauri/gen/
+# apps/desktop/src-tauri/icons/ are intentionally committed (placeholder set
+# generated via `pnpm tauri icon`). Replace with real artwork before release.
 *.app
 *.dmg
 *.deb
 *.AppImage
 *.msi
 *.exe
+
+# apps/desktop/src/routeTree.gen.ts is intentionally committed (TanStack Router
+# auto-generates it from src/routes/, but committing lets fresh clones build cold).
 
 # --- Rust ---
 # Cargo.lock IS committed at the workspace root (intentional — see Plan 1a Task 2).

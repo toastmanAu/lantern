@@ -13,7 +13,7 @@ members = [
     "crates/signer-passkey",
     "crates/signer-mldsa",
     "crates/sdk-schema",
-    # apps/desktop/src-tauri — added in Task 4 when the Tauri shell lands
+    "apps/desktop/src-tauri",
 ]
 default-members = [
     "crates/wallet-core",
@@ -32,7 +32,7 @@ default-members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 authors = ["Lantern contributors"]
 repository = "https://github.com/toastmanAu/lantern"

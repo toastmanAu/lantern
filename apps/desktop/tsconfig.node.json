@@ -1,0 +1,11 @@
+{
+  "extends": "@lantern/tsconfig/base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "composite": true,
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts"]
+}
