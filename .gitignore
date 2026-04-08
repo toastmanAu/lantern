@@ -1,0 +1,67 @@
+# --- research artifacts (graphify outputs + raw clones) ---
+# These are session-local research, not source. Keep the code on disk but out of git.
+research/*/raw/
+research/*/__pycache__/
+research/*/extract_gpt.py
+research/*/.graphify_*
+research/*/log_*.txt
+research/*/run_*.sh
+
+# Keep graphify-out (the result of the work) so it's reproducible from git
+# but the multi-megabyte graph.json files don't belong in git either — they
+# regenerate from raw/. Comment out the next line if you want to commit them.
+research/*/graphify-out/
+
+# --- local tooling state ---
+.graphify_python
+.remember/
+
+# --- build artifacts ---
+target/
+dist/
+build/
+out/
+node_modules/
+.next/
+.turbo/
+.parcel-cache/
+*.tsbuildinfo
+
+# --- editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+*~
+.direnv/
+.envrc
+
+# --- secrets (defense in depth) ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+.secrets/
+
+# --- Tauri ---
+src-tauri/target/
+src-tauri/gen/
+src-tauri/icons/  # Generated from tauri icon command
+*.app
+*.dmg
+*.deb
+*.AppImage
+*.msi
+*.exe
+
+# --- Rust ---
+Cargo.lock  # Keep at workspace root only — see workspace .gitignore
+**/*.rs.bk
+
+# --- Lantern wallet runtime data (never in repo) ---
+*.vault
+vault-*.bin
+lantern-*.log
