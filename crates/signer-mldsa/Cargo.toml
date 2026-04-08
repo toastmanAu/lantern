@@ -1,0 +1,16 @@
+[package]
+name = "lantern-signer-mldsa"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Lantern post-quantum signer — ML-DSA-44/65/87 + Falcon-512/1024"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true

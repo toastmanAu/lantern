@@ -1,0 +1,16 @@
+[package]
+name = "lantern-signer-ledger"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Lantern Ledger hardware wallet signer — APDU + Nervos app protocol"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true

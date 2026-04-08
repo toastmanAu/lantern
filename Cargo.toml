@@ -13,7 +13,7 @@ members = [
     "crates/signer-passkey",
     "crates/signer-mldsa",
     "crates/sdk-schema",
-    "apps/desktop/src-tauri",
+    # apps/desktop/src-tauri — added in Task 4 when the Tauri shell lands
 ]
 default-members = [
     "crates/wallet-core",
@@ -53,7 +53,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Schema generation (specta + tauri-specta) — pinned in plans 1c+ when first command lands
-specta = "2.0.0-rc.20"
+specta = "=2.0.0-rc.20"
 tauri-specta = { version = "2.0.0-rc.21", features = ["derive", "typescript"] }
 specta-typescript = "0.0.7"
 
@@ -75,3 +75,18 @@ debug = true
 [profile.test]
 opt-level = 1
 debug = true
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_imports = "warn"
+unused_variables = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Allow these — too noisy or stylistic
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
