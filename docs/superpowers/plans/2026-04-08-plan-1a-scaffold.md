@@ -2,6 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Plan errata applied 2026-04-08 (post Tasks 1+2 review loops):** Three plan-level bugs were caught during execution and fixed in-place in this file so future runs work first try:
+>
+> 1. **Task 1 Step 2** — `[workspace.members]` originally listed `apps/desktop/src-tauri` before Task 4 creates that directory. Cargo refuses to parse a workspace with a missing member. Now commented out at the Task 1 stage with an explanatory comment; Task 4 Step 10 re-enables it.
+> 2. **Task 1 Step 2** — `specta = "2.0.0-rc.20"` (caret) resolves to rc.24 which requires nightly features. Now exact-pinned `=2.0.0-rc.20` with an inline comment explaining why.
+> 3. **Task 2 Steps 1–11** — placeholder unit tests originally used `fn placeholder()`. The workspace lints have `clippy::pedantic = warn`, which fires `clippy::missing_const_for_fn` on trivially-const-eligible no-op tests. CI in Task 6 will run `cargo clippy -- -D warnings` and fail on these. Now `const fn placeholder()`. Doc comments for `signer-secp256k1`, `signer-passkey`, `signer-ledger` also have `secp256k1_blake160` / `WitnessArgs` / `WebAuthn` / `LedgerHQ` wrapped in backticks to silence `clippy::doc_markdown`.
+> 4. **Task 1 Step 2** — `tauri = { version = "2.2", features = [] }` was removed. The empty `features = []` explicitly suppresses default features when consuming crates use `tauri = { workspace = true }`, which would cause confusing compile errors in Task 4. Now `tauri = { version = "2.2" }`.
+> 5. **Task 1 Step 4** — added a comment above the `xtask` cargo alias explaining that the `xtask` crate doesn't exist yet and the alias will fail until a later plan adds it.
+>
+> All five fixes are baked into the task content below. The original commit messages on tasks 1 and 2 (already landed in the worktree) document the in-flight fixes; this errata block exists so a fresh execution from the corrected plan won't repeat the discovery loop.
+
 **Goal:** Stand up the empty Lantern monorepo — Cargo workspace with stub crates, Tauri 2 desktop shell, React+TS+Vite frontend, pnpm workspace, CI matrix — so that subsequent plans can start filling in the substantive code without spending time on boilerplate. The result is a buildable, installable empty Tauri app that opens a window saying "Lantern" and runs `cargo test` + `pnpm test` cleanly with zero failures.
 
 **Architecture:** Single git repo (`~/ckb-wallet`, will move to `~/lantern` if name sticks). Cargo workspace at root with stub crates under `crates/`. pnpm workspace under `apps/desktop/` and `packages/`. Tauri 2 with `apps/desktop/src-tauri/` as the shell entry point and `apps/desktop/src/` as the React frontend. CI runs cargo + pnpm + tauri build matrix on macOS, Linux glibc, Linux musl, Windows.
@@ -138,7 +148,9 @@ members = [
     "crates/signer-passkey",
     "crates/signer-mldsa",
     "crates/sdk-schema",
-    "apps/desktop/src-tauri",
+    # apps/desktop/src-tauri — re-enabled in Task 4 Step 10 when the Tauri shell directory exists.
+    # Cargo refuses to parse a workspace with a missing member, so this entry stays commented out
+    # until Task 4 creates the apps/desktop/src-tauri/ directory and its Cargo.toml.
 ]
 default-members = [
     "crates/wallet-core",
@@ -177,13 +189,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Schema generation (specta + tauri-specta) — pinned in plans 1c+ when first command lands
-specta = "2.0.0-rc.20"
+# Schema generation (specta + tauri-specta) — pinned in plans 1c+ when first command lands.
+# specta is EXACT-pinned (`=`) because rc.21+ pulls in unstable nightly features (const_type_id,
+# debug_closure_helpers). Caret matching `2.0.0-rc.20` would let Cargo resolve to rc.24 and break
+# the build on stable. Revisit when specta hits a stable 2.0 release.
+specta = "=2.0.0-rc.20"
 tauri-specta = { version = "2.0.0-rc.21", features = ["derive", "typescript"] }
 specta-typescript = "0.0.7"
 
-# Tauri (the desktop app crate references workspace tauri version directly)
-tauri = { version = "2.2", features = [] }
+# Tauri (the desktop app crate references workspace tauri version directly).
+# Do NOT add `features = []` — that explicitly suppresses default features when consuming crates
+# use `tauri = { workspace = true }`, which causes confusing compile errors in Task 4.
+tauri = { version = "2.2" }
 tauri-build = "2.0"
 
 [profile.release]
@@ -235,6 +252,7 @@ mkdir -p .cargo
 git-fetch-with-cli = true
 
 [alias]
+# xtask helper crate is added in a later plan; this alias will fail until then
 xtask = "run --quiet --package xtask --"
 ```
 
@@ -326,9 +344,10 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {
+    const fn placeholder() {
         // Placeholder so `cargo test -p lantern-wallet-core` runs.
         // Real tests land in subsequent plans.
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
     }
 }
 ```
@@ -372,7 +391,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -417,7 +438,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -461,7 +484,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -504,7 +529,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -548,7 +575,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -580,10 +609,10 @@ tracing.workspace = true
 
 ```rust
 // crates/signer-secp256k1/src/lib.rs
-//! Lantern secp256k1_blake160 signer.
+//! Lantern `secp256k1_blake160` signer.
 //!
-//! Implements the canonical CKB secp256k1_blake160 sighash signing scheme
-//! per RFC 0019. Witness layout follows the WitnessArgs molecule schema.
+//! Implements the canonical CKB `secp256k1_blake160` sighash signing scheme
+//! per RFC 0019. Witness layout follows the `WitnessArgs` molecule schema.
 //! Implementation lands in plan 1c.
 
 #![forbid(unsafe_code)]
@@ -591,7 +620,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -625,7 +656,7 @@ tracing.workspace = true
 // crates/signer-ledger/src/lib.rs
 //! Lantern Ledger signer.
 //!
-//! Talks to a Ledger Nano running the LedgerHQ Nervos app via HID.
+//! Talks to a Ledger Nano running the `LedgerHQ` Nervos app via HID.
 //! Implementation lands in plan 2.
 
 #![forbid(unsafe_code)]
@@ -633,7 +664,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -667,7 +700,7 @@ tracing.workspace = true
 // crates/signer-passkey/src/lib.rs
 //! Lantern passkey signer.
 //!
-//! WebAuthn / FIDO2 / CTAP2 hardware key support. v0.1 baseline is hardware
+//! `WebAuthn` / FIDO2 / CTAP2 hardware key support. v0.1 baseline is hardware
 //! FIDO2 keys via libfido2 on all three platforms; biometric paths added
 //! per-platform where available. Implementation lands in plan 4.
 
@@ -676,7 +709,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -718,7 +753,9 @@ tracing.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -761,7 +798,9 @@ specta.workspace = true
 #[cfg(test)]
 mod tests {
     #[test]
-    fn placeholder() {}
+    const fn placeholder() {
+        // `const fn` silences clippy::missing_const_for_fn under the workspace's pedantic lints.
+    }
 }
 ```
 
@@ -789,15 +828,23 @@ missing_panics_doc = "allow"
 
 - [ ] **Step 13: Verify the workspace builds**
 
-Run: `cargo build --workspace`
+Run: `cargo build`
 
-Expected: Compiles all 11 stub crates with no errors. May emit clippy warnings on first build — that's fine, lints will be tightened later.
+Expected: Compiles all 11 stub crates with no errors and no warnings. (`cargo build` without `--workspace` builds the `default-members` set, which excludes `apps/desktop/src-tauri` — that's correct, it's not yet created. The `apps/desktop/src-tauri` entry in `[workspace.members]` is commented out as of this plan's errata fix.)
 
 If the build fails because Rust 1.85 with edition 2024 isn't available yet, fall back to `edition = "2021"` and `rust-version = "1.84"` in `[workspace.package]` and re-run. (Edition 2024 stabilized in early 2025; check `rustc --edition help` to verify.)
 
-- [ ] **Step 14: Verify cargo test runs**
+- [ ] **Step 14: Verify clippy is clean**
 
-Run: `cargo test --workspace`
+Run: `cargo clippy --workspace --all-targets -- -D warnings`
+
+Expected: exit code 0, no output. CI in Task 6 runs the same command — this MUST pass before committing.
+
+The placeholder tests use `const fn` (not plain `fn`) specifically to silence `clippy::missing_const_for_fn` under the workspace's pedantic lints. The doc comments for `signer-secp256k1`, `signer-passkey`, and `signer-ledger` use backticks around `secp256k1_blake160` / `WitnessArgs` / `WebAuthn` / `LedgerHQ` to silence `clippy::doc_markdown`.
+
+- [ ] **Step 15: Verify cargo test runs**
+
+Run: `cargo test`
 
 Expected: 11 tests pass (one `placeholder` per crate). Output looks like:
 
@@ -809,7 +856,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored
 
 repeated 11 times.
 
-- [ ] **Step 15: Commit**
+- [ ] **Step 16: Commit**
 
 ```bash
 git add crates/ Cargo.toml
@@ -1286,7 +1333,25 @@ function IndexPage() {
 }
 ```
 
-- [ ] **Step 10: Create the Tauri shell Cargo.toml**
+- [ ] **Step 10: Re-enable apps/desktop/src-tauri in workspace.members + create the Tauri shell Cargo.toml**
+
+**First**, edit the root `Cargo.toml` and re-enable the `apps/desktop/src-tauri` member that Task 1 left commented out. Find the block in `[workspace.members]`:
+
+```toml
+    # apps/desktop/src-tauri — re-enabled in Task 4 Step 10 when the Tauri shell directory exists.
+    # Cargo refuses to parse a workspace with a missing member, so this entry stays commented out
+    # until Task 4 creates the apps/desktop/src-tauri/ directory and its Cargo.toml.
+```
+
+Replace it with the actual member entry:
+
+```toml
+    "apps/desktop/src-tauri",
+```
+
+(Drop the comment block — its purpose is served once the directory exists.)
+
+**Then**, create the Tauri shell Cargo.toml:
 
 ```toml
 # apps/desktop/src-tauri/Cargo.toml
@@ -1308,10 +1373,12 @@ name = "lantern_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { workspace = true, features = [] }
+tauri-build = { workspace = true }
 
 [dependencies]
-tauri = { workspace = true, features = [] }
+# tauri inherits the workspace's default features. Add per-feature flags here as the
+# Tauri command surface grows in plan 1f.
+tauri = { workspace = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
@@ -1320,6 +1387,8 @@ serde_json.workspace = true
 # Workspace crates — empty stubs for now, real wiring lands in plan 1f
 lantern-wallet-core = { path = "../../../crates/wallet-core" }
 ```
+
+After this step, run `cargo metadata --format-version 1 --no-deps > /dev/null` to verify the workspace parses cleanly with the new member. Expect exit 0 and no output.
 
 - [ ] **Step 11: Create the Tauri config**
 
