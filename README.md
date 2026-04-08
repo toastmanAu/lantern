@@ -20,6 +20,47 @@
 
 Source corpora live under `research/<name>/raw/` (gitignored — clone-on-demand). Graphs are viewable at `http://127.0.0.1:8765/` under "ckb-wallet research".
 
+## Building
+
+**Prerequisites:**
+- Rust 1.88+ via [rustup](https://rustup.rs) (the `rust-toolchain.toml` will pin to 1.92 stable)
+- Node.js 22 LTS (see `.nvmrc`)
+- pnpm 10+
+- On Linux: `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf`
+- On macOS: Xcode Command Line Tools
+- On Windows: WebView2 Runtime (preinstalled on Windows 11)
+
+**One-time setup:**
+
+```bash
+git clone https://github.com/toastmanAu/lantern.git
+cd lantern
+pnpm install
+```
+
+**Run the dev shell:**
+
+```bash
+pnpm dev
+```
+
+This launches Vite + the Tauri shell. A window opens titled "Lantern" with a placeholder page. Hot-reload works on the React frontend; the Rust shell rebuilds on `Cargo.toml`/`.rs` changes.
+
+**Run all tests:**
+
+```bash
+cargo test --workspace      # Rust tests
+pnpm -r test                # Frontend tests
+```
+
+**Build a release artifact:**
+
+```bash
+pnpm tauri build
+```
+
+Output appears under `apps/desktop/src-tauri/target/release/bundle/`.
+
 ## Roadmap
 
 - **v0.1 — Foundation** — secp256k1 wallet, embedded light client, vault, extension host skeleton, minimal UI. Testnet → mainnet.
