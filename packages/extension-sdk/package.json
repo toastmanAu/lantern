@@ -1,0 +1,17 @@
+{
+  "name": "@lantern/extension-sdk",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --noEmit -p .",
+    "test": "echo \"no tests yet\" && exit 0",
+    "lint": "echo \"no linter yet\" && exit 0"
+  },
+  "devDependencies": {
+    "@lantern/tsconfig": "workspace:*",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "extends": "@lantern/tsconfig/base.json",
+  "include": ["src/**/*"]
+}
