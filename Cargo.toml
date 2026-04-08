@@ -1,0 +1,77 @@
+# Cargo.toml
+[workspace]
+resolver = "2"
+members = [
+    "crates/wallet-core",
+    "crates/vault",
+    "crates/chain-backend",
+    "crates/extension-host",
+    "crates/tx-builder",
+    "crates/account-registry",
+    "crates/signer-secp256k1",
+    "crates/signer-ledger",
+    "crates/signer-passkey",
+    "crates/signer-mldsa",
+    "crates/sdk-schema",
+    "apps/desktop/src-tauri",
+]
+default-members = [
+    "crates/wallet-core",
+    "crates/vault",
+    "crates/chain-backend",
+    "crates/extension-host",
+    "crates/tx-builder",
+    "crates/account-registry",
+    "crates/signer-secp256k1",
+    "crates/signer-ledger",
+    "crates/signer-passkey",
+    "crates/signer-mldsa",
+    "crates/sdk-schema",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Lantern contributors"]
+repository = "https://github.com/toastmanAu/lantern"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.42", features = ["full"] }
+async-trait = "0.1"
+
+# Errors and logging
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Serde
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Schema generation (specta + tauri-specta) — pinned in plans 1c+ when first command lands
+specta = "2.0.0-rc.20"
+tauri-specta = { version = "2.0.0-rc.21", features = ["derive", "typescript"] }
+specta-typescript = "0.0.7"
+
+# Tauri (the desktop app crate references workspace tauri version directly)
+tauri = { version = "2.2" }
+tauri-build = "2.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.test]
+opt-level = 1
+debug = true

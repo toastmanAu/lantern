@@ -1,0 +1,12 @@
+# .cargo/config.toml
+[build]
+# Faster incremental linking on Linux via mold (optional — falls back to system linker if absent)
+# Comment out the next two lines if mold is not installed
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[net]
+git-fetch-with-cli = true
+
+[alias]
+# xtask helper crate is added in a later plan; this alias will fail until then
+xtask = "run --quiet --package xtask --"
