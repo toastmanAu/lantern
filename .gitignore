@@ -58,7 +58,8 @@ src-tauri/icons/  # Generated from tauri icon command
 *.exe
 
 # --- Rust ---
-Cargo.lock  # Keep at workspace root only — see workspace .gitignore
+# Cargo.lock IS committed at the workspace root (intentional — see Plan 1a Task 2).
+# Sub-crate lock files (if any future binary crate adds one) would be ignored here.
 **/*.rs.bk
 
 # --- Lantern wallet runtime data (never in repo) ---
