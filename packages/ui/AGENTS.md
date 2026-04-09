@@ -35,6 +35,28 @@ MUST follow these rules. Violations should be flagged in code review.
    (truncation, copy, reveal, confirmation) require human review — flag
    the diff explicitly in the PR description.
 
+## Layout rules (locked)
+
+These are hard constraints for every screen in `apps/desktop/src/features/**`.
+Generated screens that violate these MUST be regenerated, not patched.
+
+- **Desktop-first, ~1280×800 baseline.** Lantern is a Tauri desktop wallet, not
+  a mobile web app. Use the horizontal width.
+- **Sidebar nav rail + two-pane main area** is the default shell. Left rail:
+  Send / Receive / Channels / Settings. Main area: form pane (left) + live tx
+  preview / account context pane (right). The preview pane builds trust by
+  showing the user what they're about to sign as they type.
+- **NO centered narrow column.** `max-w-lg`, `max-w-md`, `max-w-sm` on a top-
+  level screen container is forbidden — it looks like a mobile emulator on a
+  desktop window. The only exception is genuinely single-action surfaces
+  (unlock prompt, seed reveal modal).
+- **NO vertical scroll on standard screens.** Every screen must fit the
+  viewport. If content overflows, the design is wrong — split into tabs,
+  collapse sections, or rethink the screen. Scroll is only acceptable for
+  explicit list surfaces (tx history, address book).
+- **Accent color is Nervos green** (`--lantern-color-accent`, `#3cc68a`).
+  Never reach for blue or cyan, even as a placeholder.
+
 ## Composition checklist for generated screens
 
 Before committing an agent-generated screen, verify:

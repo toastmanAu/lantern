@@ -1,0 +1,76 @@
+/*
+ * @lantern/ui — WarningBanner styles
+ *
+ * Three severities — info / warning / danger. Danger uses role="alert" and
+ * is non-dismissable (enforced in the .tsx). Soft tinted backgrounds, never
+ * full saturated fills.
+ */
+
+[data-lantern-banner] {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lantern-space-3);
+  padding: var(--lantern-space-3) var(--lantern-space-4);
+  border: 1px solid transparent;
+  border-radius: var(--lantern-radius-md);
+  font-family: var(--lantern-font-sans);
+  font-size: var(--lantern-font-size-sm);
+}
+
+[data-lantern-banner][data-severity="info"] {
+  background: var(--lantern-color-info-bg);
+  border-color: var(--lantern-color-info-border);
+  color: var(--lantern-color-info-text);
+}
+
+[data-lantern-banner][data-severity="warning"] {
+  background: var(--lantern-color-warning-bg);
+  border-color: var(--lantern-color-warning-border);
+  color: var(--lantern-color-warning-text);
+}
+
+[data-lantern-banner][data-severity="danger"] {
+  background: var(--lantern-color-danger-bg);
+  border-color: var(--lantern-color-danger-border);
+  color: var(--lantern-color-danger-text);
+}
+
+[data-lantern-banner] [data-slot="title"] {
+  flex: 1;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+[data-lantern-banner] [data-slot="body"] {
+  flex-basis: 100%;
+  margin-top: var(--lantern-space-1);
+  color: var(--lantern-color-text-secondary);
+  line-height: 1.5;
+}
+
+[data-lantern-banner] [data-slot="dismiss"] {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: var(--lantern-radius-sm);
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity var(--lantern-motion-fast) var(--lantern-motion-ease);
+}
+
+[data-lantern-banner] [data-slot="dismiss"]:hover {
+  opacity: 1;
+}
+
+[data-lantern-banner] [data-slot="dismiss"]:focus-visible {
+  outline: none;
+  box-shadow: var(--lantern-focus-ring);
+}

@@ -1,0 +1,69 @@
+/*
+ * @lantern/ui — AddressDisplay styles
+ *
+ * Read-only address card with head+tail truncation and an optional copy slot.
+ * The container itself carries aria-label={fullAddress} for screen readers.
+ */
+
+[data-lantern-address] {
+  display: flex;
+  align-items: center;
+  gap: var(--lantern-space-3);
+  padding: var(--lantern-space-3) var(--lantern-space-4);
+  background: var(--lantern-color-bg-raised);
+  border: 1px solid var(--lantern-color-border-subtle);
+  border-radius: var(--lantern-radius-lg);
+  font-family: var(--lantern-font-sans);
+  min-height: 48px;
+}
+
+[data-lantern-address] [data-slot="label"] {
+  flex-shrink: 0;
+  font-size: var(--lantern-font-size-xs);
+  font-weight: 500;
+  color: var(--lantern-color-text-secondary);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+[data-lantern-address] [data-slot="value"] {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--lantern-font-mono);
+  font-size: var(--lantern-font-size-sm);
+  color: var(--lantern-color-text-primary);
+  user-select: all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-lantern-address] [data-slot="copy"] {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 var(--lantern-space-3);
+  background: transparent;
+  border: 1px solid var(--lantern-color-border-strong);
+  border-radius: var(--lantern-radius-md);
+  color: var(--lantern-color-accent);
+  font-family: var(--lantern-font-sans);
+  font-size: var(--lantern-font-size-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color var(--lantern-motion-fast) var(--lantern-motion-ease),
+    border-color var(--lantern-motion-fast) var(--lantern-motion-ease);
+}
+
+[data-lantern-address] [data-slot="copy"]:hover {
+  background: var(--lantern-color-accent-soft);
+  border-color: var(--lantern-color-accent);
+}
+
+[data-lantern-address] [data-slot="copy"]:focus-visible {
+  outline: none;
+  box-shadow: var(--lantern-focus-ring);
+}

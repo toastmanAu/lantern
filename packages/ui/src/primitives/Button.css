@@ -1,0 +1,104 @@
+/*
+ * @lantern/ui — Button styles
+ *
+ * Targets the data-* attributes set by primitives/Button.tsx. Do not introduce
+ * className-based selectors. All values reference tokens.css.
+ */
+
+[data-lantern-button] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--lantern-space-2);
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--lantern-radius-lg);
+  font-family: var(--lantern-font-sans);
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--lantern-motion-fast) var(--lantern-motion-ease),
+    border-color var(--lantern-motion-fast) var(--lantern-motion-ease),
+    transform var(--lantern-motion-fast) var(--lantern-motion-ease),
+    box-shadow var(--lantern-motion-fast) var(--lantern-motion-ease);
+}
+
+[data-lantern-button]:focus-visible {
+  outline: none;
+  box-shadow: var(--lantern-focus-ring);
+}
+
+[data-lantern-button]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+[data-lantern-button][data-loading] {
+  cursor: wait;
+}
+
+/* Sizes */
+[data-lantern-button][data-size="sm"] {
+  height: 36px;
+  padding: 0 var(--lantern-space-4);
+  font-size: var(--lantern-font-size-sm);
+}
+[data-lantern-button][data-size="md"] {
+  height: 48px;
+  padding: 0 var(--lantern-space-5);
+  font-size: var(--lantern-font-size-md);
+}
+[data-lantern-button][data-size="lg"] {
+  height: 56px;
+  padding: 0 var(--lantern-space-6);
+  font-size: var(--lantern-font-size-lg);
+}
+
+/* Variants */
+[data-lantern-button][data-variant="primary"] {
+  background: var(--lantern-color-accent);
+  color: var(--lantern-color-on-accent);
+}
+[data-lantern-button][data-variant="primary"]:hover:not(:disabled) {
+  background: var(--lantern-color-accent-hover);
+  transform: translateY(-1px);
+}
+[data-lantern-button][data-variant="primary"]:active:not(:disabled) {
+  background: var(--lantern-color-accent-pressed);
+  transform: translateY(0);
+}
+
+[data-lantern-button][data-variant="secondary"] {
+  background: var(--lantern-color-bg-raised);
+  border-color: var(--lantern-color-border-strong);
+  color: var(--lantern-color-text-primary);
+}
+[data-lantern-button][data-variant="secondary"]:hover:not(:disabled) {
+  background: var(--lantern-color-border-subtle);
+  border-color: var(--lantern-color-text-muted);
+}
+
+[data-lantern-button][data-variant="danger"] {
+  background: var(--lantern-color-danger);
+  color: var(--lantern-color-text-primary);
+}
+[data-lantern-button][data-variant="danger"]:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+[data-lantern-button][data-variant="ghost"] {
+  background: transparent;
+  color: var(--lantern-color-text-primary);
+}
+[data-lantern-button][data-variant="ghost"]:hover:not(:disabled) {
+  background: var(--lantern-color-bg-raised);
+}
+
+[data-lantern-button] [data-slot="leading"],
+[data-lantern-button] [data-slot="trailing"] {
+  display: inline-flex;
+  align-items: center;
+}

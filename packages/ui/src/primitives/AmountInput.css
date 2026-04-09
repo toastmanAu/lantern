@@ -1,0 +1,117 @@
+/*
+ * @lantern/ui — AmountInput styles
+ *
+ * Numeric amount field with unit, Max button, balance hint, and error slot.
+ * Container border becomes the focus + error indicator (no full red fill —
+ * the user must always be able to read what they typed).
+ */
+
+[data-lantern-amount] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-2);
+  padding: var(--lantern-space-4);
+  background: var(--lantern-color-bg-raised);
+  border: 1px solid var(--lantern-color-border-subtle);
+  border-radius: var(--lantern-radius-lg);
+  transition: border-color var(--lantern-motion-fast) var(--lantern-motion-ease);
+}
+
+[data-lantern-amount]:focus-within {
+  border-color: var(--lantern-color-accent);
+  box-shadow: 0 0 0 3px var(--lantern-color-accent-soft);
+}
+
+[data-lantern-amount][data-invalid] {
+  border-color: var(--lantern-color-danger-border);
+}
+
+[data-lantern-amount][data-invalid]:focus-within {
+  box-shadow: 0 0 0 3px var(--lantern-color-danger-bg);
+}
+
+[data-lantern-amount][data-disabled] {
+  opacity: 0.6;
+}
+
+[data-lantern-amount] [data-slot="row"] {
+  display: flex;
+  align-items: baseline;
+  gap: var(--lantern-space-3);
+}
+
+[data-lantern-amount] [data-slot="input"] {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--lantern-color-text-primary);
+  font-family: var(--lantern-font-sans);
+  font-size: var(--lantern-font-size-xl);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-lantern-amount] [data-slot="input"]::placeholder {
+  color: var(--lantern-color-text-muted);
+}
+
+[data-lantern-amount] [data-slot="input"]:disabled {
+  cursor: not-allowed;
+}
+
+[data-lantern-amount] [data-slot="unit"] {
+  flex-shrink: 0;
+  color: var(--lantern-color-text-secondary);
+  font-size: var(--lantern-font-size-md);
+  font-weight: 500;
+}
+
+[data-lantern-amount] [data-slot="max"] {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 var(--lantern-space-3);
+  background: transparent;
+  border: 1px solid var(--lantern-color-border-strong);
+  border-radius: var(--lantern-radius-sm);
+  color: var(--lantern-color-accent);
+  font-family: var(--lantern-font-sans);
+  font-size: var(--lantern-font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    background-color var(--lantern-motion-fast) var(--lantern-motion-ease),
+    border-color var(--lantern-motion-fast) var(--lantern-motion-ease);
+}
+
+[data-lantern-amount] [data-slot="max"]:hover:not(:disabled) {
+  background: var(--lantern-color-accent-soft);
+  border-color: var(--lantern-color-accent);
+}
+
+[data-lantern-amount] [data-slot="max"]:focus-visible {
+  outline: none;
+  box-shadow: var(--lantern-focus-ring);
+}
+
+[data-lantern-amount] [data-slot="max"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lantern-amount] [data-slot="balance"] {
+  font-size: var(--lantern-font-size-xs);
+  color: var(--lantern-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-lantern-amount] [data-slot="error"] {
+  font-size: var(--lantern-font-size-xs);
+  color: var(--lantern-color-danger-text);
+}
+
+[data-lantern-amount] [data-slot="decimals"] {
+  display: none;
+}

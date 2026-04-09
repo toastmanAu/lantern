@@ -1,0 +1,193 @@
+/*
+ * @lantern/ui — TxReviewPanel styles
+ *
+ * The right pane of the sidebar + two-pane wallet layout. Visual hierarchy:
+ *   header (kind + network badge)  →  parties  →  warnings  →  amounts  →  meta
+ *
+ * Amounts use right-aligned tabular-nums and reserve column width so the
+ * digits don't dance as the user types in the form pane on the left.
+ */
+
+[data-lantern-tx-review] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-5);
+  padding: var(--lantern-space-5);
+  background: var(--lantern-color-bg-raised);
+  border: 1px solid var(--lantern-color-border-subtle);
+  border-radius: var(--lantern-radius-lg);
+  font-family: var(--lantern-font-sans);
+  color: var(--lantern-color-text-primary);
+}
+
+[data-lantern-tx-review][data-network="testnet"] {
+  border-top: 3px solid var(--lantern-color-warning);
+}
+
+/* Header */
+[data-lantern-tx-review] [data-slot="header"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--lantern-space-3);
+}
+
+[data-lantern-tx-review] [data-slot="kind"] {
+  font-size: var(--lantern-font-size-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+[data-lantern-tx-review] [data-slot="network"] {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 var(--lantern-space-3);
+  border: 1px solid transparent;
+  border-radius: var(--lantern-radius-pill);
+  font-size: var(--lantern-font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+[data-lantern-tx-review] [data-slot="network"][data-network="mainnet"] {
+  background: var(--lantern-color-accent-soft);
+  border-color: var(--lantern-color-accent);
+  color: var(--lantern-color-accent);
+}
+
+[data-lantern-tx-review] [data-slot="network"][data-network="testnet"] {
+  background: var(--lantern-color-warning-bg);
+  border-color: var(--lantern-color-warning-border);
+  color: var(--lantern-color-warning-text);
+}
+
+/* Party rows (from / to) */
+[data-lantern-tx-review] [data-slot="party"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-1);
+  padding: var(--lantern-space-3) 0;
+  border-top: 1px solid var(--lantern-color-border-subtle);
+}
+
+[data-lantern-tx-review] [data-slot="party-label"] {
+  font-size: var(--lantern-font-size-xs);
+  font-weight: 500;
+  color: var(--lantern-color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+[data-lantern-tx-review] [data-slot="party-value"] {
+  font-family: var(--lantern-font-mono);
+  font-size: var(--lantern-font-size-sm);
+  color: var(--lantern-color-text-primary);
+  user-select: all;
+}
+
+/* Inline warnings slot (caller passes <WarningBanner/>) */
+[data-lantern-tx-review] [data-slot="warnings"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-2);
+}
+
+/* Amounts table */
+[data-lantern-tx-review] [data-slot="amounts"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-2);
+  margin: 0;
+  padding: var(--lantern-space-4) 0 0;
+  border-top: 1px solid var(--lantern-color-border-subtle);
+}
+
+[data-lantern-tx-review] [data-slot="amount-row"] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--lantern-space-4);
+}
+
+[data-lantern-tx-review] [data-slot="amount-row"] dt {
+  font-size: var(--lantern-font-size-sm);
+  color: var(--lantern-color-text-secondary);
+}
+
+[data-lantern-tx-review] [data-slot="amount-row"] dd {
+  margin: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--lantern-space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-lantern-tx-review] [data-slot="amount-row"] [data-slot="number"] {
+  font-size: var(--lantern-font-size-md);
+  font-weight: 600;
+  color: var(--lantern-color-text-primary);
+}
+
+[data-lantern-tx-review] [data-slot="amount-row"] [data-slot="unit"] {
+  font-size: var(--lantern-font-size-sm);
+  color: var(--lantern-color-text-secondary);
+}
+
+[data-lantern-tx-review]
+  [data-slot="amount-row"][data-amount-role="total"] {
+  margin-top: var(--lantern-space-2);
+  padding-top: var(--lantern-space-3);
+  border-top: 1px solid var(--lantern-color-border-subtle);
+}
+
+[data-lantern-tx-review]
+  [data-slot="amount-row"][data-amount-role="total"]
+  dt {
+  color: var(--lantern-color-text-primary);
+  font-weight: 600;
+}
+
+[data-lantern-tx-review]
+  [data-slot="amount-row"][data-amount-role="total"]
+  [data-slot="number"] {
+  font-size: var(--lantern-font-size-lg);
+}
+
+/* Meta rows */
+[data-lantern-tx-review] [data-slot="meta"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-2);
+  margin: 0;
+  padding: var(--lantern-space-4) 0 0;
+  border-top: 1px solid var(--lantern-color-border-subtle);
+}
+
+[data-lantern-tx-review] [data-slot="meta-row"] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--lantern-space-4);
+  font-size: var(--lantern-font-size-sm);
+}
+
+[data-lantern-tx-review] [data-slot="meta-row"] dt {
+  color: var(--lantern-color-text-secondary);
+}
+
+[data-lantern-tx-review] [data-slot="meta-row"] dd {
+  margin: 0;
+  color: var(--lantern-color-text-primary);
+  text-align: right;
+  word-break: break-word;
+}
+
+[data-lantern-tx-review] [data-slot="meta-row"][data-emphasis="warning"] dd {
+  color: var(--lantern-color-warning-text);
+}
+
+[data-lantern-tx-review] [data-slot="meta-row"][data-emphasis="danger"] dd {
+  color: var(--lantern-color-danger-text);
+}

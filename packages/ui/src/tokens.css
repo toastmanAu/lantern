@@ -27,16 +27,33 @@
   --lantern-color-border-subtle: #1f242b;
   --lantern-color-border-strong: #2c333c;
 
-  /* Brand / accent — tuned for CKB/Nervos green family, placeholder values */
-  --lantern-color-accent: #3fd28b;
-  --lantern-color-accent-hover: #4fe39b;
-  --lantern-color-accent-pressed: #2fb874;
+  /* Brand / accent — Nervos green (locked, see project_design_directives memory) */
+  --lantern-color-accent: #3cc68a;
+  --lantern-color-accent-hover: #4dd49a;
+  --lantern-color-accent-pressed: #2ead75;
+  --lantern-color-accent-soft: rgba(60, 198, 138, 0.12);
+  --lantern-color-on-accent: #07140d;
 
-  /* Semantic — wallet-critical */
+  /* Semantic — wallet-critical (foreground/icon strength) */
   --lantern-color-danger: #ff5a5f;
   --lantern-color-warning: #f7b955;
-  --lantern-color-success: #3fd28b;
+  --lantern-color-success: #3cc68a;
   --lantern-color-info: #4a9eff;
+
+  /* Semantic surfaces — soft backgrounds for banners and error states.
+   * Helper text uses *-text variants which are softer than the icon color
+   * so error copy stays legible against the dark base. */
+  --lantern-color-danger-bg: rgba(255, 90, 95, 0.10);
+  --lantern-color-danger-border: rgba(255, 90, 95, 0.45);
+  --lantern-color-danger-text: #fda4a8;
+
+  --lantern-color-warning-bg: rgba(247, 185, 85, 0.10);
+  --lantern-color-warning-border: rgba(247, 185, 85, 0.40);
+  --lantern-color-warning-text: #f8cc7e;
+
+  --lantern-color-info-bg: rgba(74, 158, 255, 0.10);
+  --lantern-color-info-border: rgba(74, 158, 255, 0.40);
+  --lantern-color-info-text: #8fbeff;
 
   /* Spacing scale (4px base) */
   --lantern-space-0: 0;

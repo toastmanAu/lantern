@@ -6,6 +6,11 @@
  */
 
 import "./tokens.css";
+import "./primitives/Button.css";
+import "./primitives/AddressDisplay.css";
+import "./primitives/AmountInput.css";
+import "./primitives/WarningBanner.css";
+import "./primitives/TxReviewPanel.css";
 
 export { Button } from "./primitives/Button.js";
 export type { ButtonProps, ButtonVariant, ButtonSize } from "./primitives/Button.js";
@@ -19,4 +24,12 @@ export type { AmountInputProps } from "./primitives/AmountInput.js";
 export { WarningBanner } from "./primitives/WarningBanner.js";
 export type { WarningBannerProps, WarningSeverity } from "./primitives/WarningBanner.js";
 
-export const VERSION = "0.0.2";
+export { TxReviewPanel } from "./primitives/TxReviewPanel.js";
+export type {
+  TxReviewPanelProps,
+  TxReviewKind,
+  TxReviewNetwork,
+  TxReviewMetaRow,
+} from "./primitives/TxReviewPanel.js";
+
+export const VERSION = "0.0.3";
