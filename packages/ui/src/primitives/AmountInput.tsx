@@ -3,9 +3,12 @@ import type { ReactNode } from "react";
 /**
  * Sanitize a raw amount string into a canonical numeric form.
  *
- * Policy (Option B — accept + normalize):
- *   - Accept paste-friendly input: commas are treated as decimal separators
- *     when there is no dot, and as thousands separators otherwise.
+ * Policy (Option B — accept + normalize, English locale only):
+ *   - Commas are ALWAYS stripped. They are never reinterpreted as a decimal
+ *     mark, even when typed alone — that surprised users in testing
+ *     ("I typed a comma and it became a dot"). Letters and stray symbols
+ *     are dropped silently; commas now behave the same way for consistency.
+ *     Pasting "1,234.56" still cleanly becomes "1234.56".
  *   - Strip any character that is not a digit or a decimal point.
  *   - Collapse multiple decimal points to the first one.
  *   - Truncate the fractional part to `decimals` digits (no rounding —
@@ -16,16 +19,9 @@ import type { ReactNode } from "react";
 export function sanitizeAmount(raw: string, decimals: number): string {
   if (raw === "") return "";
 
-  // Decide whether a comma is a decimal separator or a thousands separator.
-  // If there's no dot and exactly one comma, treat it as the decimal mark.
-  const hasDot = raw.includes(".");
-  const commaCount = (raw.match(/,/g) ?? []).length;
-  let normalized = raw;
-  if (!hasDot && commaCount === 1) {
-    normalized = normalized.replace(",", ".");
-  } else {
-    normalized = normalized.replace(/,/g, "");
-  }
+  // Always strip commas. The wallet is English-locale; commas are thousands
+  // separators on paste and noise on type. Never a decimal mark.
+  let normalized = raw.replace(/,/g, "");
 
   // Keep only digits and dots.
   normalized = normalized.replace(/[^\d.]/g, "");

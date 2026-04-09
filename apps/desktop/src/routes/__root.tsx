@@ -4,10 +4,10 @@ export const Route = createRootRoute({
   component: RootLayout,
 });
 
+/**
+ * Root shell. Routes own the viewport — no padding, no max-width, no
+ * inline styles here. Layout decisions live inside each route's CSS file.
+ */
 function RootLayout() {
-  return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: "2rem" }}>
-      <Outlet />
-    </main>
-  );
+  return <Outlet />;
 }

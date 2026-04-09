@@ -23,8 +23,12 @@ describe("sanitizeAmount", () => {
     assert.equal(sanitizeAmount("12.", CKB), "12.");
   });
 
-  it("treats a lone comma as a decimal separator (locale paste)", () => {
-    assert.equal(sanitizeAmount("1,5", CKB), "1.5");
+  it("always strips commas — never reinterprets as decimal mark", () => {
+    // Typing or pasting a lone comma should drop it silently, the same way
+    // letters and other non-numeric input are dropped. The previous policy
+    // converted "1,5" → "1.5" which surprised users.
+    assert.equal(sanitizeAmount("1,5", CKB), "15");
+    assert.equal(sanitizeAmount(",", CKB), "");
   });
 
   it("strips commas used as thousands separators", () => {

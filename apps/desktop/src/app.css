@@ -1,0 +1,45 @@
+/*
+ * App-level reset and viewport sizing for the Tauri shell.
+ *
+ * Routes own their own internal layout — this file ONLY establishes:
+ *   - Box-sizing baseline
+ *   - Body fills the Tauri window with the dark base surface
+ *   - #root is a full-viewport flex container so children can use 100% sizing
+ *   - System font fallback before screen-specific typography kicks in
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+}
+
+html {
+  background: var(--lantern-color-bg-base);
+  color-scheme: dark;
+}
+
+body {
+  background: var(--lantern-color-bg-base);
+  color: var(--lantern-color-text-primary);
+  font-family: var(--lantern-font-sans);
+  font-size: var(--lantern-font-size-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

@@ -1,0 +1,147 @@
+/*
+ * Sandbox Send-screen layout.
+ *
+ * Three-column shell as locked in packages/ui/AGENTS.md:
+ *   nav rail  |  form pane  |  tx review pane
+ *
+ * The shell fills the viewport without scroll. Each pane handles its own
+ * internal vertical layout — no scroll allowed at this level either.
+ *
+ * Tokens only — no magic values.
+ */
+
+.lantern-shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr);
+  height: 100vh;
+  background: var(--lantern-color-bg-base);
+  color: var(--lantern-color-text-primary);
+  overflow: hidden;
+}
+
+/* ---------- Nav rail ---------- */
+
+.lantern-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-5);
+  padding: var(--lantern-space-5) var(--lantern-space-4);
+  background: var(--lantern-color-bg-sunken);
+  border-right: 1px solid var(--lantern-color-border-subtle);
+}
+
+.lantern-rail-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--lantern-space-3);
+  padding: 0 var(--lantern-space-2);
+  font-size: var(--lantern-font-size-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--lantern-color-text-primary);
+}
+
+.lantern-rail-brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--lantern-radius-pill);
+  background: var(--lantern-color-accent);
+  box-shadow: 0 0 12px var(--lantern-color-accent);
+}
+
+.lantern-rail-nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-1);
+}
+
+.lantern-rail-nav button {
+  display: flex;
+  align-items: center;
+  gap: var(--lantern-space-3);
+  width: 100%;
+  padding: var(--lantern-space-3) var(--lantern-space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--lantern-radius-md);
+  color: var(--lantern-color-text-secondary);
+  font-family: inherit;
+  font-size: var(--lantern-font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--lantern-motion-fast) var(--lantern-motion-ease);
+}
+
+.lantern-rail-nav button:hover {
+  background: var(--lantern-color-bg-raised);
+  color: var(--lantern-color-text-primary);
+}
+
+.lantern-rail-nav button[data-active] {
+  background: var(--lantern-color-accent-soft);
+  color: var(--lantern-color-accent);
+}
+
+.lantern-rail-nav button:focus-visible {
+  outline: none;
+  box-shadow: var(--lantern-focus-ring);
+}
+
+.lantern-rail-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  font-size: var(--lantern-font-size-md);
+}
+
+.lantern-rail-footer {
+  margin-top: auto;
+  font-size: var(--lantern-font-size-xs);
+  color: var(--lantern-color-text-muted);
+  padding: 0 var(--lantern-space-2);
+}
+
+/* ---------- Form pane ---------- */
+
+.lantern-form-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lantern-space-5);
+  padding: var(--lantern-space-6) var(--lantern-space-6);
+  border-right: 1px solid var(--lantern-color-border-subtle);
+  min-width: 0;
+}
+
+.lantern-form-pane-header h1 {
+  margin: 0 0 var(--lantern-space-1);
+  font-size: var(--lantern-font-size-xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.lantern-form-pane-header p {
+  margin: 0;
+  font-size: var(--lantern-font-size-sm);
+  color: var(--lantern-color-text-secondary);
+}
+
+.lantern-form-actions {
+  display: flex;
+  gap: var(--lantern-space-3);
+  margin-top: auto;
+}
+
+/* ---------- Review pane ---------- */
+
+.lantern-review-pane {
+  display: flex;
+  flex-direction: column;
+  padding: var(--lantern-space-6) var(--lantern-space-6);
+  background: var(--lantern-color-bg-base);
+  min-width: 0;
+}

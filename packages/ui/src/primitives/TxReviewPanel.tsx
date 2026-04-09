@@ -44,22 +44,22 @@ export interface TxReviewPanelProps {
   kind: TxReviewKind;
   network: TxReviewNetwork;
   /** Address of the sender / origin account. */
-  from?: string;
+  from?: string | undefined;
   /** Address of the recipient / counterparty. */
-  to?: string;
+  to?: string | undefined;
   /** Principal amount as a pre-sanitised display string (no math here). */
-  amount?: string;
-  amountUnit?: string;
+  amount?: string | undefined;
+  amountUnit?: string | undefined;
   /** Network fee, pre-formatted. */
-  fee?: string;
-  feeUnit?: string;
+  fee?: string | undefined;
+  feeUnit?: string | undefined;
   /** Total = amount + fee. Caller computes; panel renders. */
-  total?: string;
-  totalUnit?: string;
+  total?: string | undefined;
+  totalUnit?: string | undefined;
   /** Optional key-value rows below the amounts (memo, channel id, etc.). */
-  meta?: TxReviewMetaRow[];
+  meta?: TxReviewMetaRow[] | undefined;
   /** Inline warning slot — pass <WarningBanner/> elements here. */
-  warnings?: ReactNode;
+  warnings?: ReactNode | undefined;
 }
 
 const KIND_LABELS: Record<TxReviewKind, string> = {
