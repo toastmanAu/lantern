@@ -1,0 +1,90 @@
+/*
+ * @lantern/ui design tokens
+ *
+ * All primitives in this package reference these CSS variables. Screens in
+ * apps/desktop consume the primitives and MUST NOT redefine or override
+ * these values outside of theme scopes below.
+ *
+ * Token naming: --lantern-<category>-<role>-<variant?>
+ * Categories: color, space, radius, font, shadow, motion, focus
+ */
+
+:root,
+[data-theme="dark"] {
+  /* Surface / background */
+  --lantern-color-bg-base: #0b0d10;
+  --lantern-color-bg-raised: #14171c;
+  --lantern-color-bg-sunken: #070809;
+  --lantern-color-bg-overlay: rgba(0, 0, 0, 0.6);
+
+  /* Text */
+  --lantern-color-text-primary: #f3f5f7;
+  --lantern-color-text-secondary: #a2abb5;
+  --lantern-color-text-muted: #6b7480;
+  --lantern-color-text-inverse: #0b0d10;
+
+  /* Border */
+  --lantern-color-border-subtle: #1f242b;
+  --lantern-color-border-strong: #2c333c;
+
+  /* Brand / accent — tuned for CKB/Nervos green family, placeholder values */
+  --lantern-color-accent: #3fd28b;
+  --lantern-color-accent-hover: #4fe39b;
+  --lantern-color-accent-pressed: #2fb874;
+
+  /* Semantic — wallet-critical */
+  --lantern-color-danger: #ff5a5f;
+  --lantern-color-warning: #f7b955;
+  --lantern-color-success: #3fd28b;
+  --lantern-color-info: #4a9eff;
+
+  /* Spacing scale (4px base) */
+  --lantern-space-0: 0;
+  --lantern-space-1: 4px;
+  --lantern-space-2: 8px;
+  --lantern-space-3: 12px;
+  --lantern-space-4: 16px;
+  --lantern-space-5: 24px;
+  --lantern-space-6: 32px;
+  --lantern-space-7: 48px;
+  --lantern-space-8: 64px;
+
+  /* Radius */
+  --lantern-radius-sm: 4px;
+  --lantern-radius-md: 8px;
+  --lantern-radius-lg: 12px;
+  --lantern-radius-pill: 999px;
+
+  /* Font */
+  --lantern-font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --lantern-font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --lantern-font-size-xs: 12px;
+  --lantern-font-size-sm: 14px;
+  --lantern-font-size-md: 16px;
+  --lantern-font-size-lg: 20px;
+  --lantern-font-size-xl: 28px;
+  --lantern-font-size-display: 40px;
+
+  /* Shadow */
+  --lantern-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --lantern-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --lantern-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  /* Motion */
+  --lantern-motion-fast: 120ms;
+  --lantern-motion-med: 200ms;
+  --lantern-motion-slow: 320ms;
+  --lantern-motion-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Focus ring — mandatory for all interactive primitives */
+  --lantern-focus-ring: 0 0 0 2px var(--lantern-color-bg-base),
+                        0 0 0 4px var(--lantern-color-accent);
+}
+
+/*
+ * Light theme placeholder. Fill in when/if a light theme is approved.
+ * Wallet UIs are dark-first for OLED and legibility in signing flows.
+ */
+[data-theme="light"] {
+  /* TODO(plan-1f): light theme values */
+}

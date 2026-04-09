@@ -1,6 +1,6 @@
 {
   "name": "@lantern/ui",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -10,8 +10,13 @@
     "test": "echo \"no tests yet\" && exit 0",
     "lint": "echo \"no linter yet\" && exit 0"
   },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
   "devDependencies": {
     "@lantern/tsconfig": "workspace:*",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
     "typescript": "^5.7.0"
   }
 }
