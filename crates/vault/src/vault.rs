@@ -167,6 +167,15 @@ impl Vault {
     {
         f(self.master_key.expose_secret())
     }
+
+    /// Derive an extension-scoped 32-byte subkey via HKDF-SHA256 over the
+    /// vault master key. See `subkey.rs` for the info-string format.
+    pub fn extension_subkey(
+        &self,
+        extension_id: &str,
+    ) -> Result<SecretBox<[u8; 32]>, VaultError> {
+        self.with_master_key(|mk| crate::subkey::derive_extension_subkey(mk, extension_id))
+    }
 }
 
 #[cfg(test)]

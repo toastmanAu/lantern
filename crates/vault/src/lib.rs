@@ -12,6 +12,7 @@ pub mod error;
 pub mod format;
 pub mod kdf;
 pub mod secret;
+pub mod subkey;
 pub mod vault;
 
 pub use error::VaultError;
