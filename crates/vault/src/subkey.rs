@@ -32,7 +32,8 @@ pub fn derive_extension_subkey(
     info.extend_from_slice(INFO_PREFIX);
     info.extend_from_slice(extension_id.as_bytes());
     let mut out = [0u8; 32];
-    hk.expand(&info, &mut out).map_err(|_| VaultError::HkdfFailed)?;
+    hk.expand(&info, &mut out)
+        .map_err(|_| VaultError::HkdfFailed)?;
     let boxed = SecretBox::new(Box::new(out));
     out.zeroize();
     Ok(boxed)

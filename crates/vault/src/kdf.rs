@@ -21,13 +21,8 @@ pub fn derive_master_key(
     t_cost: u16,
     p_cost: u16,
 ) -> Result<[u8; 32], VaultError> {
-    let params = Params::new(
-        m_cost_kib,
-        u32::from(t_cost),
-        u32::from(p_cost),
-        Some(32),
-    )
-    .map_err(|_| VaultError::KdfFailed)?;
+    let params = Params::new(m_cost_kib, u32::from(t_cost), u32::from(p_cost), Some(32))
+        .map_err(|_| VaultError::KdfFailed)?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut out = [0u8; 32];
     argon2
@@ -39,6 +34,7 @@ pub fn derive_master_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::VaultError;
     use crate::format::{V1_ARGON2_M_KIB, V1_ARGON2_P, V1_ARGON2_T};
 
     // Use tiny params in tests so they don't take 400ms each.
@@ -48,23 +44,36 @@ mod tests {
 
     #[test]
     fn same_inputs_same_output() {
-        let k1 = derive_master_key(b"hunter2", b"salty-salty-saltsa", TEST_M, TEST_T, TEST_P).unwrap();
-        let k2 = derive_master_key(b"hunter2", b"salty-salty-saltsa", TEST_M, TEST_T, TEST_P).unwrap();
+        let k1 =
+            derive_master_key(b"hunter2", b"salty-salty-saltsa", TEST_M, TEST_T, TEST_P).unwrap();
+        let k2 =
+            derive_master_key(b"hunter2", b"salty-salty-saltsa", TEST_M, TEST_T, TEST_P).unwrap();
         assert_eq!(k1, k2);
     }
 
     #[test]
     fn different_passwords_diverge() {
-        let k1 = derive_master_key(b"hunter2", b"salty-salty-saltsa", TEST_M, TEST_T, TEST_P).unwrap();
-        let k2 = derive_master_key(b"hunter3", b"salty-salty-saltsa", TEST_M, TEST_T, TEST_P).unwrap();
+        let k1 =
+            derive_master_key(b"hunter2", b"salty-salty-saltsa", TEST_M, TEST_T, TEST_P).unwrap();
+        let k2 =
+            derive_master_key(b"hunter3", b"salty-salty-saltsa", TEST_M, TEST_T, TEST_P).unwrap();
         assert_ne!(k1, k2);
     }
 
     #[test]
     fn different_salts_diverge() {
-        let k1 = derive_master_key(b"hunter2", b"salty-salty-salts1", TEST_M, TEST_T, TEST_P).unwrap();
-        let k2 = derive_master_key(b"hunter2", b"salty-salty-salts2", TEST_M, TEST_T, TEST_P).unwrap();
+        let k1 =
+            derive_master_key(b"hunter2", b"salty-salty-salts1", TEST_M, TEST_T, TEST_P).unwrap();
+        let k2 =
+            derive_master_key(b"hunter2", b"salty-salty-salts2", TEST_M, TEST_T, TEST_P).unwrap();
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn invalid_params_return_kdf_failed() {
+        // m_cost_kib = 0 is rejected by Params::new, must surface as KdfFailed.
+        let err = derive_master_key(b"x", &[0u8; 16], 0, 1, 1).unwrap_err();
+        assert!(matches!(err, VaultError::KdfFailed));
     }
 
     #[test]

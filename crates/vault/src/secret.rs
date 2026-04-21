@@ -28,6 +28,10 @@ impl MasterKey {
 /// Inner vault payload. A map of blob-name → raw bytes. The concrete type
 /// stored under each key is the caller's concern (they serialise whatever
 /// they want before calling `Vault::put`).
+///
+/// **Cloning is expensive AND duplicates secret material.** Every blob value
+/// is copied. Prefer borrowing via `Vault::get` → `&[u8]`-style APIs when
+/// possible.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct InnerStore {
     pub blobs: BTreeMap<String, Vec<u8>>,
@@ -79,11 +83,21 @@ mod tests {
     #[test]
     fn inner_store_roundtrips_cbor() {
         let mut s = InnerStore::new();
-        s.blobs.insert("mnemonic".into(), b"abandon abandon ...".to_vec());
+        s.blobs
+            .insert("mnemonic".into(), b"abandon abandon ...".to_vec());
         let mut buf: Vec<u8> = Vec::new();
         ciborium::into_writer(&s, &mut buf).unwrap();
         let decoded: InnerStore = ciborium::from_reader(buf.as_slice()).unwrap();
         assert_eq!(decoded.blobs, s.blobs);
+    }
+
+    #[test]
+    fn inner_store_zeroize_clears_blobs() {
+        let mut s = InnerStore::new();
+        s.blobs.insert("a".into(), vec![0x41, 0x42, 0x43]);
+        s.blobs.insert("b".into(), vec![0x44, 0x45]);
+        s.zeroize();
+        assert!(s.blobs.is_empty(), "zeroize() must clear the map");
     }
 
     #[test]

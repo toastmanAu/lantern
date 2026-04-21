@@ -23,13 +23,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::aead::{open, seal};
 use crate::error::VaultError;
-use crate::format::{Header, HEADER_LEN, NONCE_LEN, SALT_LEN};
+use crate::format::{HEADER_LEN, Header, NONCE_LEN, SALT_LEN};
 use crate::kdf::derive_master_key;
 use crate::secret::InnerStore;
 
@@ -61,7 +61,12 @@ impl Vault {
         key_bytes.zeroize();
 
         let store = SecretBox::new(Box::new(InnerStore::new()));
-        let v = Self { path, header, master_key, store };
+        let v = Self {
+            path,
+            header,
+            master_key,
+            store,
+        };
         v.save()?;
         Ok(v)
     }
@@ -86,19 +91,16 @@ impl Vault {
             header.p_cost,
         )?;
 
-        let plaintext: Zeroizing<Vec<u8>> = match open(&key_bytes, &header.nonce, ciphertext) {
-            Ok(p) => Zeroizing::new(p),
-            Err(_) => {
-                // AEAD failure is either wrong password or tampering. From
-                // the caller's perspective the former is vastly more common,
-                // so map to WrongPassword — but a true tampering attack
-                // can't be distinguished without additional state.
-                return Err(VaultError::WrongPassword);
-            }
+        let Ok(plaintext_bytes) = open(&key_bytes, &header.nonce, ciphertext) else {
+            // AEAD failure is either wrong password or tampering. From the caller's
+            // perspective the former is vastly more common, so map to WrongPassword —
+            // but a true tampering attack can't be distinguished without additional state.
+            return Err(VaultError::WrongPassword);
         };
+        let plaintext: zeroize::Zeroizing<Vec<u8>> = zeroize::Zeroizing::new(plaintext_bytes);
 
-        let store: InnerStore = ciborium::from_reader(plaintext.as_slice())
-            .map_err(|_| VaultError::SerdeFailed)?;
+        let store: InnerStore =
+            ciborium::from_reader(plaintext.as_slice()).map_err(|_| VaultError::SerdeFailed)?;
         // plaintext drops here (and on all error paths above), zeroizing its buffer
 
         let master_key = SecretBox::new(Box::new(key_bytes));
@@ -137,6 +139,9 @@ impl Vault {
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
         let mut header = self.header;
+        // Note: self.header.nonce is intentionally NOT updated — the on-disk
+        // nonce rotates each save, but in-memory we keep the original header
+        // (it's re-read from disk on next unlock anyway).
         header.nonce = nonce;
 
         let ciphertext = seal(self.master_key.expose_secret(), &nonce, &plaintext)?;
@@ -170,10 +175,7 @@ impl Vault {
 
     /// Derive an extension-scoped 32-byte subkey via HKDF-SHA256 over the
     /// vault master key. See `subkey.rs` for the info-string format.
-    pub fn extension_subkey(
-        &self,
-        extension_id: &str,
-    ) -> Result<SecretBox<[u8; 32]>, VaultError> {
+    pub fn extension_subkey(&self, extension_id: &str) -> Result<SecretBox<[u8; 32]>, VaultError> {
         self.with_master_key(|mk| crate::subkey::derive_extension_subkey(mk, extension_id))
     }
 }
@@ -207,7 +209,10 @@ mod tests {
             v.save().unwrap();
         }
         let v = Vault::unlock(&path, b"pw").unwrap();
-        assert_eq!(v.get("mnemonic").as_deref(), Some(&b"abandon abandon abandon"[..]));
+        assert_eq!(
+            v.get("mnemonic").as_deref(),
+            Some(&b"abandon abandon abandon"[..])
+        );
     }
 
     #[test]

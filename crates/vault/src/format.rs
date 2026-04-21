@@ -42,7 +42,7 @@ pub struct Header {
 
 impl Header {
     /// Build a fresh v1 header with the pinned Argon2id params.
-    pub fn new_v1(salt: [u8; SALT_LEN], nonce: [u8; NONCE_LEN]) -> Self {
+    pub const fn new_v1(salt: [u8; SALT_LEN], nonce: [u8; NONCE_LEN]) -> Self {
         Self {
             version: VERSION_V1,
             kdf_algo: KDF_ARGON2ID,
@@ -92,7 +92,15 @@ impl Header {
         salt.copy_from_slice(&bytes[18..34]);
         let mut nonce = [0u8; NONCE_LEN];
         nonce.copy_from_slice(&bytes[34..58]);
-        Ok(Self { version, kdf_algo, m_cost_kib, t_cost, p_cost, salt, nonce })
+        Ok(Self {
+            version,
+            kdf_algo,
+            m_cost_kib,
+            t_cost,
+            p_cost,
+            salt,
+            nonce,
+        })
     }
 }
 
@@ -126,6 +134,16 @@ mod tests {
         assert!(matches!(
             Header::decode(&bytes),
             Err(VaultError::UnsupportedVersion(2))
+        ));
+    }
+
+    #[test]
+    fn rejects_unsupported_kdf() {
+        let mut bytes = Header::new_v1([0; SALT_LEN], [0; NONCE_LEN]).encode();
+        bytes[9] = 0x02; // bogus KDF algorithm id
+        assert!(matches!(
+            Header::decode(&bytes),
+            Err(VaultError::UnsupportedKdf(2))
         ));
     }
 

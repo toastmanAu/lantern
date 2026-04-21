@@ -5,12 +5,15 @@
 //! this module just does not care where the nonce came from.
 
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
     Key, XChaCha20Poly1305, XNonce,
+    aead::{Aead, KeyInit},
 };
 
 use crate::error::VaultError;
 
+// TODO(v2): expose associated data (AAD) parameter for header
+// authentication. Vault v1 does not authenticate the on-disk header;
+// when v2 adds authentication, extend seal/open with an aad: &[u8] arg.
 pub fn seal(key: &[u8; 32], nonce: &[u8; 24], plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     cipher
@@ -47,7 +50,10 @@ mod tests {
         let bad = [0x12u8; 32];
         let nonce = [0x22u8; 24];
         let ct = seal(&key, &nonce, b"x").unwrap();
-        assert!(matches!(open(&bad, &nonce, &ct), Err(VaultError::AuthFailed)));
+        assert!(matches!(
+            open(&bad, &nonce, &ct),
+            Err(VaultError::AuthFailed)
+        ));
     }
 
     #[test]
@@ -56,7 +62,10 @@ mod tests {
         let nonce = [0x22u8; 24];
         let mut ct = seal(&key, &nonce, b"hello").unwrap();
         ct[0] ^= 1;
-        assert!(matches!(open(&key, &nonce, &ct), Err(VaultError::AuthFailed)));
+        assert!(matches!(
+            open(&key, &nonce, &ct),
+            Err(VaultError::AuthFailed)
+        ));
     }
 
     #[test]

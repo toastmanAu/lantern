@@ -55,7 +55,9 @@ fn tampered_file_fails_unlock() {
         v.put("secret", b"value");
         v.save().unwrap();
     }
-    // Flip one bit inside the ciphertext region (past the 58-byte header).
+    // Flip one bit in the last byte. The AEAD ciphertext+tag spans bytes
+    // 58..end, so the last byte is always inside the Poly1305-authenticated
+    // region — tampering must be detected on unlock.
     let mut bytes = fs::read(&path).unwrap();
     let last = bytes.len() - 1;
     bytes[last] ^= 0x01;
