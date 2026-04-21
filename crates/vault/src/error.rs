@@ -28,6 +28,10 @@ pub enum VaultError {
     #[error("wrong password")]
     WrongPassword,
 
+    /// Internal use only — map this to [`VaultError::WrongPassword`] before
+    /// surfacing to callers. A true tampering attack and a wrong password
+    /// cannot be distinguished at the AEAD layer, and exposing `AuthFailed`
+    /// to users creates a confusing UX.
     #[error("vault payload failed authentication (tampered or corrupt)")]
     AuthFailed,
 
@@ -36,4 +40,24 @@ pub enum VaultError {
 
     #[error("HKDF expansion failed")]
     HkdfFailed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VaultError;
+
+    #[test]
+    fn error_display_is_redacted() {
+        // Secret-bearing errors must never print raw secret bytes.
+        let e = VaultError::WrongPassword;
+        let s = format!("{e}");
+        assert_eq!(s, "wrong password");
+    }
+
+    #[test]
+    fn io_error_converts() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "x");
+        let e: VaultError = io_err.into();
+        assert!(matches!(e, VaultError::Io(_)));
+    }
 }
