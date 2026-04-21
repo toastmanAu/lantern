@@ -1,13 +1,24 @@
-//! Lantern vault.
-//!
-//! Encrypted at-rest storage for secret material (mnemonic seeds, private keys,
-//! per-extension secrets). Encryption: XChaCha20-Poly1305 + Argon2id KDF.
-//! Implementation lands in plan 1b.
-
 #![forbid(unsafe_code)]
+
+pub mod error;
+pub use error::VaultError;
 
 #[cfg(test)]
 mod tests {
+    use super::VaultError;
+
     #[test]
-    const fn placeholder() {}
+    fn error_display_is_redacted() {
+        // Secret-bearing errors must never print raw secret bytes.
+        let e = VaultError::WrongPassword;
+        let s = format!("{e}");
+        assert_eq!(s, "wrong password");
+    }
+
+    #[test]
+    fn io_error_converts() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "x");
+        let e: VaultError = io_err.into();
+        assert!(matches!(e, VaultError::Io(_)));
+    }
 }

@@ -48,16 +48,6 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-# Crypto (plan 1b: vault)
-argon2 = "0.5"
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
-secrecy = "0.10"
-zeroize = { version = "1.8", features = ["derive"] }
-rand = "0.8"
-ciborium = "0.2"
-
 # Serde
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
