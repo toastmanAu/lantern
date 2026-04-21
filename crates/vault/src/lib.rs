@@ -3,6 +3,7 @@
 pub mod error;
 pub mod format;
 pub mod kdf;
+pub mod aead;
 pub use error::VaultError;
 
 #[cfg(test)]
