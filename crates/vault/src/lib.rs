@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod format;
 pub use error::VaultError;
 
 #[cfg(test)]
