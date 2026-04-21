@@ -40,6 +40,9 @@ pub enum VaultError {
 
     #[error("HKDF expansion failed")]
     HkdfFailed,
+
+    #[error("extension_id must be non-empty")]
+    InvalidExtensionId,
 }
 
 #[cfg(test)]
