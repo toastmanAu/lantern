@@ -15,7 +15,8 @@
 //! **Memory hygiene guarantees:**
 //! - Master key is always inside a `SecretBox<[u8; 32]>`.
 //! - Inner store is always inside a `SecretBox<InnerStore>`.
-//! - Password bytes are zeroized before function return.
+//! - The `password` parameter is borrowed; the caller is responsible
+//!   for zeroizing their password buffer after the call returns.
 //! - `mlock` is NOT performed in this plan (1b). See the module doc for
 //!   why, and plan 1c for the follow-up.
 
@@ -24,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use rand::{rngs::OsRng, RngCore};
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::aead::{open, seal};
 use crate::error::VaultError;
@@ -49,7 +50,7 @@ impl Vault {
         OsRng.fill_bytes(&mut nonce);
         let header = Header::new_v1(salt, nonce);
 
-        let key_bytes = derive_master_key(
+        let mut key_bytes = derive_master_key(
             password,
             &header.salt,
             header.m_cost_kib,
@@ -57,6 +58,7 @@ impl Vault {
             header.p_cost,
         )?;
         let master_key = SecretBox::new(Box::new(key_bytes));
+        key_bytes.zeroize();
 
         let store = SecretBox::new(Box::new(InnerStore::new()));
         let v = Self { path, header, master_key, store };
@@ -76,7 +78,7 @@ impl Vault {
         let header = Header::decode(&bytes[..HEADER_LEN])?;
         let ciphertext = &bytes[HEADER_LEN..];
 
-        let key_bytes = derive_master_key(
+        let mut key_bytes = derive_master_key(
             password,
             &header.salt,
             header.m_cost_kib,
@@ -84,8 +86,8 @@ impl Vault {
             header.p_cost,
         )?;
 
-        let plaintext = match open(&key_bytes, &header.nonce, ciphertext) {
-            Ok(p) => p,
+        let plaintext: Zeroizing<Vec<u8>> = match open(&key_bytes, &header.nonce, ciphertext) {
+            Ok(p) => Zeroizing::new(p),
             Err(_) => {
                 // AEAD failure is either wrong password or tampering. From
                 // the caller's perspective the former is vastly more common,
@@ -97,9 +99,10 @@ impl Vault {
 
         let store: InnerStore = ciborium::from_reader(plaintext.as_slice())
             .map_err(|_| VaultError::SerdeFailed)?;
+        // plaintext drops here (and on all error paths above), zeroizing its buffer
 
-        // Zeroize the derived key copy we produced before wrapping.
         let master_key = SecretBox::new(Box::new(key_bytes));
+        key_bytes.zeroize();
 
         Ok(Self {
             path,
@@ -126,8 +129,8 @@ impl Vault {
     }
 
     pub fn save(&self) -> Result<(), VaultError> {
-        let mut plaintext: Vec<u8> = Vec::new();
-        ciborium::into_writer(self.store.expose_secret(), &mut plaintext)
+        let mut plaintext: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
+        ciborium::into_writer(self.store.expose_secret(), &mut *plaintext)
             .map_err(|_| VaultError::SerdeFailed)?;
 
         // Fresh nonce on every save — this is the XChaCha guarantee.
@@ -137,8 +140,7 @@ impl Vault {
         header.nonce = nonce;
 
         let ciphertext = seal(self.master_key.expose_secret(), &nonce, &plaintext)?;
-
-        plaintext.zeroize();
+        // plaintext drops here (or on any earlier ? path) — automatic zeroize
 
         let mut out: Vec<u8> = Vec::with_capacity(HEADER_LEN + ciphertext.len());
         out.extend_from_slice(&header.encode());
