@@ -58,6 +58,9 @@ impl Vault {
             header.p_cost,
         )?;
         let master_key = SecretBox::new(Box::new(key_bytes));
+        // `[u8; 32]` is Copy, so `Box::new(key_bytes)` above took a COPY — the
+        // stack slot `key_bytes` still holds the key bytes. Zeroize that copy
+        // now so the only live key lives inside the SecretBox.
         key_bytes.zeroize();
 
         let store = SecretBox::new(Box::new(InnerStore::new()));
@@ -104,6 +107,9 @@ impl Vault {
         // plaintext drops here (and on all error paths above), zeroizing its buffer
 
         let master_key = SecretBox::new(Box::new(key_bytes));
+        // `[u8; 32]` is Copy, so `Box::new(key_bytes)` above took a COPY — the
+        // stack slot `key_bytes` still holds the key bytes. Zeroize that copy
+        // now so the only live key lives inside the SecretBox.
         key_bytes.zeroize();
 
         Ok(Self {

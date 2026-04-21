@@ -7,12 +7,13 @@
 //! in plan 1c behind a platform feature flag. All other memory-hygiene
 //! guarantees (zeroize, `SecretBox`, no Debug leakage) are in force.
 
-pub mod aead;
+pub(crate) mod aead;
 pub mod error;
-pub mod format;
-pub mod kdf;
-pub mod secret;
-pub mod subkey;
+pub(crate) mod format;
+pub(crate) mod kdf;
+#[allow(dead_code)]
+pub(crate) mod secret;
+pub(crate) mod subkey;
 pub mod vault;
 
 pub use error::VaultError;
