@@ -15,7 +15,7 @@
     "@lantern/extension-sdk": "workspace:*",
     "@lantern/ui": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
-    "@tanstack/react-router": "^1.95.0",
+    "@tanstack/react-router": "1.168.10",
     "@tauri-apps/api": "^2.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "@lantern/tsconfig": "workspace:*",
-    "@tanstack/router-vite-plugin": "^1.95.0",
+    "@tanstack/router-vite-plugin": "1.166.27",
     "@tauri-apps/cli": "^2.2.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
