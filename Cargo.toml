@@ -61,7 +61,7 @@ ciborium = "0.2"
 # Keys + signing (plan 1c)
 secp256k1 = { version = "0.33", features = ["recovery"] }
 hmac = "0.12"
-ckb-hash = "1.1"
+ckb-hash = "=1.1.0" # 1.1.1 raised rust-version to 1.95; toolchain is pinned at 1.92
 bip39 = { version = "2.2", features = ["rand", "zeroize"] }
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 bech32 = "0.12"
