@@ -7,7 +7,11 @@
 //! and the single signing entry point (`SigningCoordinator`).
 
 pub mod error;
+pub mod keyring;
+pub mod locks;
 pub mod mnemonic;
 
 pub use error::CoreError;
+pub use keyring::Keyring;
+pub use locks::LockRegistry;
 pub use mnemonic::{MnemonicFormat, Phrase, WordCount};
