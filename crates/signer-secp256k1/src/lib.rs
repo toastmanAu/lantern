@@ -11,10 +11,12 @@ mod error;
 mod hash;
 mod hd;
 mod key;
+mod sighash;
 mod sign;
 
 pub use error::SignerError;
 pub use hash::blake160;
 pub use hd::{Branch, CKB_COIN_TYPE, derive_ckb_key};
 pub use key::{PublicKey, SigningKey, public_key};
+pub use sighash::sighash_all;
 pub use sign::{recover, sign_recoverable};
