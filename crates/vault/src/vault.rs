@@ -17,20 +17,22 @@
 //! - Inner store is always inside a `SecretBox<InnerStore>`.
 //! - The `password` parameter is borrowed; the caller is responsible
 //!   for zeroizing their password buffer after the call returns.
-//! - `mlock` is NOT performed in this plan (1b). See the module doc for
-//!   why, and plan 1c for the follow-up.
+//! - With the `mlock` feature the master key and every blob are page-locked
+//!   while unlocked (best effort; see `mlock.rs`). Guards are released after
+//!   the secrets are zeroized because `locks` is the last field.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use rand::{RngCore, rngs::OsRng};
-use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox};
+use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox, SecretSlice};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::aead::{open, seal};
 use crate::error::VaultError;
 use crate::format::{HEADER_LEN, Header, NONCE_LEN, SALT_LEN};
 use crate::kdf::derive_master_key;
+use crate::mlock::PageLocks;
 use crate::secret::InnerStore;
 
 #[derive(Debug)]
@@ -39,6 +41,7 @@ pub struct Vault {
     header: Header,
     master_key: SecretBox<[u8; 32]>,
     store: SecretBox<InnerStore>,
+    locks: PageLocks,
 }
 
 impl Vault {
@@ -64,12 +67,14 @@ impl Vault {
         key_bytes.zeroize();
 
         let store = SecretBox::new(Box::new(InnerStore::new()));
-        let v = Self {
+        let mut v = Self {
             path,
             header,
             master_key,
             store,
+            locks: PageLocks::new(),
         };
+        v.relock();
         v.save()?;
         Ok(v)
     }
@@ -112,12 +117,15 @@ impl Vault {
         // now so the only live key lives inside the SecretBox.
         key_bytes.zeroize();
 
-        Ok(Self {
+        let mut v = Self {
             path,
             header,
             master_key,
             store: SecretBox::new(Box::new(store)),
-        })
+            locks: PageLocks::new(),
+        };
+        v.relock();
+        Ok(v)
     }
 
     /// Store a blob under a name. **Blob names must not contain secret
@@ -130,10 +138,26 @@ impl Vault {
             .expose_secret_mut()
             .blobs
             .insert(name.to_string(), value.to_vec());
+        self.relock();
     }
 
-    pub fn get(&self, name: &str) -> Option<Vec<u8>> {
-        self.store.expose_secret().blobs.get(name).cloned()
+    /// Copy of a blob inside a zeroizing, `Debug`-opaque wrapper.
+    pub fn get(&self, name: &str) -> Option<SecretSlice<u8>> {
+        self.store
+            .expose_secret()
+            .blobs
+            .get(name)
+            .map(|v| SecretSlice::from(v.clone()))
+    }
+
+    /// Re-lock the pages behind the master key and every blob. Called after
+    /// any change to the store because `Vec` reallocation moves the bytes.
+    fn relock(&mut self) {
+        self.locks.clear();
+        self.locks.lock(&self.master_key.expose_secret()[..]);
+        for blob in self.store.expose_secret().blobs.values() {
+            self.locks.lock(blob);
+        }
     }
 
     pub fn save(&self) -> Result<(), VaultError> {
@@ -160,6 +184,8 @@ impl Vault {
         // Atomic-ish write: write to `<path>.tmp` then rename.
         let tmp = self.path.with_extension("tmp");
         fs::write(&tmp, &out)?;
+        // Windows: `rename` fails when the destination exists. Plan 1f's
+        // packaging work replaces this with a platform-aware atomic write.
         fs::rename(&tmp, &self.path)?;
         Ok(())
     }
@@ -202,7 +228,7 @@ mod tests {
             let _v = Vault::create(&path, b"correct horse battery staple").unwrap();
         }
         let v = Vault::unlock(&path, b"correct horse battery staple").unwrap();
-        assert_eq!(v.get("anything"), None);
+        assert!(v.get("anything").is_none());
     }
 
     #[test]
@@ -216,8 +242,8 @@ mod tests {
         }
         let v = Vault::unlock(&path, b"pw").unwrap();
         assert_eq!(
-            v.get("mnemonic").as_deref(),
-            Some(&b"abandon abandon abandon"[..])
+            v.get("mnemonic").map(|s| s.expose_secret().to_vec()),
+            Some(b"abandon abandon abandon".to_vec())
         );
     }
 
@@ -254,5 +280,35 @@ mod tests {
             err,
             VaultError::BadMagic | VaultError::TruncatedHeader { .. }
         ));
+    }
+
+    #[test]
+    fn get_returns_secret_slice_with_opaque_debug() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("vault.bin");
+        let mut v = Vault::create(&path, b"pw").unwrap();
+        v.put("k", b"top secret");
+        let got = v.get("k").expect("present");
+        assert_eq!(got.expose_secret(), b"top secret");
+        let dbg = format!("{got:?}");
+        assert!(!dbg.contains("top secret"), "debug leaked the blob: {dbg}");
+        assert!(v.get("missing").is_none());
+    }
+
+    #[test]
+    fn page_locks_cover_master_key_and_every_blob_or_warn() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("vault.bin");
+        let mut v = Vault::create(&path, b"pw").unwrap();
+        v.put("a", b"1");
+        v.put("b", b"22");
+        let expected = if cfg!(feature = "mlock") { 3 } else { 0 };
+        assert!(
+            v.locks.locked_regions() == expected || v.locks.warned(),
+            "regions={} warned={}",
+            v.locks.locked_regions(),
+            v.locks.warned()
+        );
+        v.lock();
     }
 }

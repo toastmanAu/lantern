@@ -45,6 +45,12 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
+      - name: cargo clippy (vault without mlock)
+        run: cargo clippy -p lantern-vault --all-targets --no-default-features -- -D warnings
+
+      - name: cargo test (vault without mlock)
+        run: cargo test -p lantern-vault --no-default-features
+
   frontend:
     name: Frontend workspace
     runs-on: ubuntu-24.04

@@ -5,10 +5,14 @@
 //! consumer will break the same way — so these tests are the canonical
 //! contract of the vault module.
 
+use lantern_vault::ExposeSecret;
 use lantern_vault::{Vault, VaultError};
-use secrecy::ExposeSecret;
 use std::fs;
 use tempfile::tempdir;
+
+fn blob(v: &lantern_vault::Vault, name: &str) -> Option<Vec<u8>> {
+    v.get(name).map(|s| s.expose_secret().to_vec())
+}
 
 #[test]
 fn full_lifecycle() {
@@ -26,11 +30,11 @@ fn full_lifecycle() {
     // Reopen with the same password.
     let v = Vault::unlock(&path, b"hunter2").unwrap();
     assert_eq!(
-        v.get("mnemonic").as_deref(),
+        blob(&v, "mnemonic").as_deref(),
         Some(&b"abandon abandon abandon art"[..])
     );
-    assert_eq!(v.get("ckb-key-0").as_deref(), Some(&[0xABu8; 32][..]));
-    assert_eq!(v.get("not-there"), None);
+    assert_eq!(blob(&v, "ckb-key-0").as_deref(), Some(&[0xABu8; 32][..]));
+    assert_eq!(blob(&v, "not-there"), None);
 }
 
 #[test]
@@ -96,5 +100,5 @@ fn save_twice_rotates_nonce_but_preserves_data() {
     v.save().unwrap();
     let after_2 = fs::read(&path).unwrap();
     assert_ne!(&after_1[34..58], &after_2[34..58], "nonce must rotate");
-    assert_eq!(v.get("x").as_deref(), Some(&b"y"[..]));
+    assert_eq!(blob(&v, "x").as_deref(), Some(&b"y"[..]));
 }
