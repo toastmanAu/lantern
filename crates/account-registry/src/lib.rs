@@ -1,13 +1,15 @@
-//! Lantern account registry.
-//!
-//! Stores `AccountRecord` (public projections of accounts — never holds secrets)
-//! and dispatches signing requests to the appropriate signer crate via the
-//! signing coordinator. Implementation lands in plan 1c.
-
 #![forbid(unsafe_code)]
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    const fn placeholder() {}
-}
+//! Lantern account registry.
+//!
+//! Plaintext, public-only storage of `StoredAccount` records beside the
+//! vault, plus the projection to the IPC `AccountRecord`. Never holds a
+//! secret and never names a concrete lock scheme: callers pass the
+//! `ScriptTemplate` and capabilities they obtained from the account's
+//! `LockModule`.
+
+mod address;
+mod error;
+
+pub use address::encode_full;
+pub use error::RegistryError;
