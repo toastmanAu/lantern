@@ -1,15 +1,13 @@
-//! Lantern wallet core.
-//!
-//! This crate orchestrates the vault, account registry, signing coordinator,
-//! chain backend manager, and extension host. Implementation lands in plans 1b–1f.
-
 #![forbid(unsafe_code)]
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    const fn placeholder() {
-        // Placeholder so `cargo test -p lantern-wallet-core` runs.
-        // Real tests land in subsequent plans.
-    }
-}
+//! Lantern wallet core.
+//!
+//! Orchestrates the vault, the account registry, and the lock modules.
+//! Owns the seed lifecycle (`Keyring`), the module map (`LockRegistry`),
+//! and the single signing entry point (`SigningCoordinator`).
+
+pub mod error;
+pub mod mnemonic;
+
+pub use error::CoreError;
+pub use mnemonic::{MnemonicFormat, Phrase, WordCount};
