@@ -51,15 +51,16 @@ pub struct WalletCore {
 }
 
 impl WalletCore {
-    /// Create a new profile. Refuses to overwrite an existing vault file.
-    /// Returns the phrase exactly once for the show-and-confirm flow.
+    /// Create a new profile. Refuses to overwrite an existing vault or
+    /// account file. Returns the phrase exactly once for the
+    /// show-and-confirm flow.
     pub fn create(
         paths: ProfilePaths,
         password: &[u8],
         network: Network,
         words: WordCount,
     ) -> Result<(Self, Phrase), CoreError> {
-        if paths.vault.exists() {
+        if paths.vault.exists() || paths.accounts.exists() {
             return Err(CoreError::AlreadyInitialised);
         }
         let mut vault = Vault::create(&paths.vault, password)?;
@@ -77,14 +78,15 @@ impl WalletCore {
         ))
     }
 
-    /// Create a new profile from an existing phrase (standard or combined).
+    /// Create a new profile from an existing phrase (standard or
+    /// combined). Refuses to overwrite an existing vault or account file.
     pub fn import(
         paths: ProfilePaths,
         password: &[u8],
         network: Network,
         phrase: &str,
     ) -> Result<Self, CoreError> {
-        if paths.vault.exists() {
+        if paths.vault.exists() || paths.accounts.exists() {
             return Err(CoreError::AlreadyInitialised);
         }
         // Validate before creating the vault so a typo never leaves an orphan file.
@@ -141,7 +143,7 @@ impl WalletCore {
         let module = self.locks.get(LockType::Secp256k1Blake160)?;
         let derivation = Derivation {
             change: 0,
-            index: self.accounts.next_index(0),
+            index: self.accounts.next_index(module.lock_type(), 0),
         };
         let seed = Keyring::seed_for(&self.vault, module.seed_kind())?;
         let lock_args = module.derive_lock_args(seed.expose_secret(), &derivation)?;
@@ -184,11 +186,18 @@ impl WalletCore {
             .collect()
     }
 
-    /// Re-prove the password against the vault file, then render the phrase.
-    pub fn reveal_mnemonic(&self, password: &[u8]) -> Result<Phrase, CoreError> {
+    /// Re-prove the password against the vault file, then render the
+    /// phrase. Takes `&mut self` because it must re-lock this vault's
+    /// pages after `fresh` (a second, temporary `Vault`) drops: page
+    /// locks are per page, not reference-counted, so `fresh`'s guards can
+    /// unlock pages this vault's own secrets share.
+    pub fn reveal_mnemonic(&mut self, password: &[u8]) -> Result<Phrase, CoreError> {
         let fresh = Vault::unlock(&self.paths.vault, password)?;
         let phrase = Keyring::phrase(&fresh)?;
         fresh.lock();
+        // `fresh`'s page-lock guards just dropped and may have unlocked
+        // pages this vault's master key or blobs share; restore them.
+        self.vault.relock();
         Ok(phrase)
     }
 

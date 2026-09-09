@@ -42,10 +42,13 @@ fn create_three_accounts_lock_unlock_sign_and_recover() {
     assert_ne!(lock_args_of(&a0), lock_args_of(&a1));
     core.lock();
 
-    let core = WalletCore::unlock(paths, b"pw", Network::Testnet).expect("unlocks");
+    let mut core = WalletCore::unlock(paths, b"pw", Network::Testnet).expect("unlocks");
     let accounts = core.accounts().expect("lists");
     assert_eq!(accounts.len(), 3);
     assert_eq!(accounts[1], a1);
+
+    let a3 = core.create_account("Four").expect("account 3");
+    assert_eq!(a3.public_metadata["derivation"]["index"], 3);
 
     let digest = [0x5au8; 32];
     let signature = core.signer().sign_digest(&a1.id, &digest).expect("signs");
@@ -148,6 +151,26 @@ fn create_refuses_an_existing_vault_and_unlock_needs_a_seed() {
     assert!(matches!(
         WalletCore::unlock(empty_paths, b"pw", Network::Testnet),
         Err(CoreError::SeedMissing)
+    ));
+
+    // A pre-existing accounts.json with no vault must also be refused —
+    // create/import must not silently adopt a stale account list.
+    let stale = tempdir().expect("tempdir");
+    let stale_paths = ProfilePaths::in_dir(stale.path());
+    std::fs::write(&stale_paths.accounts, br#"{"version":1,"accounts":[]}"#)
+        .expect("writes accounts.json");
+    assert!(matches!(
+        WalletCore::create(
+            stale_paths.clone(),
+            b"pw",
+            Network::Testnet,
+            WordCount::Words12
+        ),
+        Err(CoreError::AlreadyInitialised)
+    ));
+    assert!(matches!(
+        WalletCore::import(stale_paths, b"pw", Network::Testnet, TANK),
+        Err(CoreError::AlreadyInitialised)
     ));
 }
 

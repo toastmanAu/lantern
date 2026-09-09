@@ -104,7 +104,12 @@ pub fn render_phrase(entropy: &[u8]) -> Result<Phrase, CoreError> {
         MnemonicFormat::Single => entropy.len(),
         MnemonicFormat::Combined3 => entropy.len() / 3,
     };
-    let mut text = Zeroizing::new(String::new());
+    // Every 4 bytes of entropy yields 3 BIP39 words (32-bit checksum-carrying
+    // groups), and the longest English wordlist entry is 8 characters, so a
+    // 9-byte-per-word budget (8 + a separator) can never be exceeded and the
+    // buffer never reallocates, leaving no un-zeroized prefix behind.
+    let word_count = entropy.len() / 4 * 3;
+    let mut text = Zeroizing::new(String::with_capacity(word_count * 9));
     for chunk in entropy.chunks(chunk_len) {
         let mnemonic = Mnemonic::from_entropy_in(Language::English, chunk)
             .map_err(|_| CoreError::InvalidMnemonic)?;
@@ -304,6 +309,20 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert_ne!(&*a, &*b);
         assert_eq!(render_phrase(&a).expect("renders").word_count(), 24);
+    }
+
+    #[test]
+    fn render_phrase_capacity_bound_holds_for_96_byte_entropy() {
+        // Sanity check of the `word_count * 9` capacity bound computed in
+        // `render_phrase`: 96 bytes of entropy renders as 72 words, and the
+        // rendered text must never exceed 72 * 9 characters.
+        let phrase = render_phrase(&[0xffu8; 96]).expect("renders");
+        assert_eq!(phrase.word_count(), 72);
+        assert!(
+            phrase.expose().len() <= 72 * 9,
+            "rendered text of length {} exceeds the 72 * 9 capacity bound",
+            phrase.expose().len()
+        );
     }
 
     #[test]
