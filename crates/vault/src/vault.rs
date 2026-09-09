@@ -150,9 +150,13 @@ impl Vault {
             .map(|v| SecretSlice::from(v.clone()))
     }
 
-    /// Re-lock the pages behind the master key and every blob. Called after
-    /// any change to the store because `Vec` reallocation moves the bytes.
-    fn relock(&mut self) {
+    /// Re-lock this vault's pages. Called after any change to the store
+    /// because `Vec` reallocation moves the bytes.
+    ///
+    /// Call after any other `Vault` in the process has been dropped: page
+    /// locks are per page, not reference-counted, so another vault's
+    /// guards can unlock pages this vault shares.
+    pub fn relock(&mut self) {
         self.locks.clear();
         self.locks.lock(&self.master_key.expose_secret()[..]);
         for blob in self.store.expose_secret().blobs.values() {

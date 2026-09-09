@@ -6,8 +6,16 @@
 //! ignored: a wallet that cannot open is worse than one that may page.
 //!
 //! Not covered: transient buffers (Argon2 output, decrypted CBOR). Those
-//! are zeroized but never locked. A guard whose buffer was later
-//! reallocated simply unlocks a stale range on drop; that is harmless.
+//! are zeroized but never locked.
+//!
+//! Guards from separate `Vault` instances can interfere with each other:
+//! small allocations often share a page, `locked_regions()` counts guards
+//! rather than distinct pages, and `region`'s locks are per page rather
+//! than reference-counted, so dropping one vault's guards can unlock a
+//! page that a second, still-live vault's secrets happen to share. A
+//! caller that opens a second `Vault` while holding one open must call
+//! `Vault::relock()` on the first vault afterwards to restore its
+//! guarantees.
 
 use std::fmt;
 
