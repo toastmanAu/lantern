@@ -101,10 +101,14 @@ impl AccountRegistry {
         Ok(self.accounts.remove(position))
     }
 
-    /// One past the highest derived index on `change`, or 0.
-    pub fn next_index(&self, change: u32) -> u32 {
+    /// One past the highest derived index on `(lock_type, change)`, or 0.
+    /// Indices are scoped per lock type as well as per branch: two
+    /// different lock modules deriving from the same seed each start
+    /// their own account at index 0.
+    pub fn next_index(&self, lock_type: LockType, change: u32) -> u32 {
         self.accounts
             .iter()
+            .filter(|a| a.lock_type == lock_type)
             .filter_map(|a| a.derivation)
             .filter(|d| d.change == change)
             .map(|d| d.index)
@@ -162,7 +166,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let reg = AccountRegistry::open(dir.path().join("accounts.json")).expect("opens");
         assert!(reg.list().is_empty());
-        assert_eq!(reg.next_index(0), 0);
+        assert_eq!(reg.next_index(LockType::Secp256k1Blake160, 0), 0);
     }
 
     #[test]
@@ -247,7 +251,7 @@ mod tests {
         reg.add(acct(0, 0x11)).expect("adds");
         reg.add(acct(1, 0x22)).expect("adds");
         reg.add(acct(5, 0x33)).expect("adds");
-        assert_eq!(reg.next_index(0), 6);
-        assert_eq!(reg.next_index(1), 0);
+        assert_eq!(reg.next_index(LockType::Secp256k1Blake160, 0), 6);
+        assert_eq!(reg.next_index(LockType::Secp256k1Blake160, 1), 0);
     }
 }
