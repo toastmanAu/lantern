@@ -57,9 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pnpm version comes from the `packageManager` field in package.json;
+      # passing `version` as well makes the action refuse to run.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
