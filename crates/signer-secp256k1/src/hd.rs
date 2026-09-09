@@ -107,12 +107,16 @@ fn derive_child(parent: &ExtendedKey, index: u32) -> Result<ExtendedKey, SignerE
     left.copy_from_slice(&i[..32]);
     let scalar_result = Scalar::from_be_bytes(left);
     left.zeroize();
-    let tweak = scalar_result.map_err(|_| SignerError::InvalidKey)?;
-    let parent_sk =
+    let mut tweak = scalar_result.map_err(|_| SignerError::InvalidKey)?;
+    let mut parent_sk =
         SecretKey::from_secret_bytes(parent.key).map_err(|_| SignerError::InvalidKey)?;
-    let mut child_sk = parent_sk
-        .add_tweak(&tweak)
-        .map_err(|_| SignerError::InvalidKey)?;
+    // `SecretKey` is `Copy`, so `add_tweak` consumes a COPY — this `parent_sk`
+    // binding and the `tweak` scalar both still hold live key material after
+    // the call and must be erased explicitly.
+    let child = parent_sk.add_tweak(&tweak);
+    parent_sk.non_secure_erase();
+    tweak.non_secure_erase();
+    let mut child_sk = child.map_err(|_| SignerError::InvalidKey)?;
     let mut child = ExtendedKey {
         key: child_sk.to_secret_bytes(),
         chain_code: [0u8; 32],

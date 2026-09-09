@@ -62,8 +62,9 @@ mod tests {
     fn wrong_digest_does_not_recover_the_signer() {
         let key = key();
         let sig = sign_recoverable(&key, &[0x42u8; 32]);
-        let other = recover(&sig, &[0x43u8; 32]);
-        assert!(other.ok().is_none_or(|pk| pk != public_key(&key)));
+        let other =
+            recover(&sig, &[0x43u8; 32]).expect("recovery over another digest still yields a key");
+        assert_ne!(other, public_key(&key));
     }
 
     #[test]

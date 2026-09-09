@@ -5,6 +5,9 @@
 //! on drop, so every call that needs one creates a transient copy on the
 //! stack and calls `non_secure_erase` on it before returning. Copies made
 //! by the compiler when passing arrays by value are outside our control.
+//! The residue list is not exhaustive: `hmac`/`sha2` hasher state (which
+//! absorbs parent key and seed bytes during BIP32 derivation) is not
+//! zeroized either — those crates give us no API to do so.
 
 use secp256k1::{PublicKey as SecpPublicKey, SecretKey};
 use zeroize::{Zeroize, ZeroizeOnDrop};
