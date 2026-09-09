@@ -87,6 +87,8 @@ impl WalletCore {
         if paths.vault.exists() {
             return Err(CoreError::AlreadyInitialised);
         }
+        // Validate before creating the vault so a typo never leaves an orphan file.
+        crate::mnemonic::parse_phrase(phrase)?;
         let mut vault = Vault::create(&paths.vault, password)?;
         Keyring::import(&mut vault, phrase)?;
         let accounts = AccountRegistry::open(&paths.accounts)?;

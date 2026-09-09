@@ -186,7 +186,7 @@ The registry does not know any code hash. The caller passes the `ScriptTemplate`
 
 **Address.** CKB2021 full format: payload `0x00 ‖ code_hash ‖ hash_type ‖ args`, bech32m, hrp `ckb` or `ckt`. Hash type for the system secp lock is `type` (`0x01`).
 
-**Projection.** `to_record` computes `address` at read time so one stored record serves both networks. `public_metadata` carries `{ "derivationPath": "m/44'/309'/0'/0/i", "lockArgs": "0x…" }`. `capabilities` comes from the module.
+**Projection.** `to_record` computes `address` at read time so one stored record serves both networks. `public_metadata` carries `{ "derivation": { "change": 0, "index": i }, "lockArgs": "0x…" }`. The path string is lock-specific, so the registry stores the generic pair and the UI renders the path. `capabilities` comes from the module.
 
 **File.** `accounts.json` is `{ "version": 1, "accounts": [...] }`. Writes go to `accounts.json.tmp` then `fs::rename`. A parse failure is `RegistryError::Corrupt` and is never silently replaced with an empty registry.
 
@@ -231,11 +231,13 @@ impl WalletCore {
     pub fn reveal_mnemonic(&self, password: &[u8]) -> Result<Phrase, CoreError>       // re-unlocks vault.bin with the password; WrongPassword otherwise
     pub fn lock(self)
     pub fn signer(&self) -> SigningCoordinator<'_>
+    pub fn mnemonic_format(&self) -> Result<MnemonicFormat, CoreError>
+    pub fn with_locks(self, locks: LockRegistry) -> Self          // builder; swaps in a custom registry (tests, future signers)
 }
 
 pub struct SigningCoordinator<'a> { /* &WalletCore */ }
 impl SigningCoordinator<'_> {
-    pub fn sign_digest(&self, account_id: &str, digest: &[u8; 32]) -> Result<[u8; 65], CoreError>
+    pub fn sign_digest(&self, account_id: &str, digest: &[u8; 32]) -> Result<Vec<u8>, CoreError>  // witness lock bytes from the module, not fixed-size
 }
 ```
 
@@ -283,7 +285,7 @@ One `thiserror` enum per crate. `Display` text never contains key bytes, phrase 
 | sdk-schema | `SchemaError::Export(String)`; `LockError::{InvalidSeed, InvalidDerivation, Signing(String)}` |
 | signer-secp256k1 | `SignerError::{InvalidKey, InvalidSignature, DerivationOverflow}` (index ≥ 2^31 on the non-hardened levels) for the free functions; `Secp256k1Lock` maps them into `LockError` at the trait boundary |
 | account-registry | `Io`, `Corrupt`, `DuplicateId`, `NotFound`, `Address` |
-| wallet-core | `Vault(VaultError)`, `Registry(RegistryError)`, `Lock(LockError)`, `AlreadyInitialised`, `SeedMissing`, `InvalidMnemonic`, `AccountNotFound`, `UnsupportedLock` |
+| wallet-core | `Vault(VaultError)`, `Registry(RegistryError)`, `Lock(LockError)`, `AlreadyInitialised`, `SeedMissing`, `InvalidMnemonic`, `AccountNotFound`, `UnsupportedLock`, `NoSigningMaterial` (an account without a `Derivation`, which watch-only accounts will be) |
 
 `InvalidMnemonic` deliberately drops the `bip39` error detail, which can echo the offending word. It also covers unsupported word counts; the message names the accepted counts, never the input.
 
