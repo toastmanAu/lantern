@@ -10,7 +10,9 @@
 mod error;
 mod hash;
 mod key;
+mod sign;
 
 pub use error::SignerError;
 pub use hash::blake160;
 pub use key::{PublicKey, SigningKey, public_key};
+pub use sign::{recover, sign_recoverable};
