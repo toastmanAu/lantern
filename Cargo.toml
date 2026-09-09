@@ -30,7 +30,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.3"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -57,6 +57,16 @@ secrecy = "0.10"
 zeroize = { version = "1.8", features = ["derive"] }
 rand = "0.8"
 ciborium = "0.2"
+
+# Keys + signing (plan 1c)
+secp256k1 = { version = "0.33", features = ["recovery"] }
+hmac = "0.12"
+ckb-hash = "1.1"
+bip39 = { version = "2.2", features = ["rand", "zeroize"] }
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+bech32 = "0.12"
+hex = { version = "0.4", features = ["serde"] }
+region = "4.0"
 
 # Serde
 serde = { version = "1.0", features = ["derive"] }

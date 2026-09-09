@@ -12,5 +12,13 @@ description = "Lantern secp256k1_blake160 signer — canonical CKB sighash signi
 workspace = true
 
 [dependencies]
+lantern-sdk-schema = { path = "../sdk-schema" }
+secp256k1.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+ckb-hash.workspace = true
+zeroize.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
