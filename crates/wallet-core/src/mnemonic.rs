@@ -229,6 +229,30 @@ mod tests {
     }
 
     #[test]
+    fn real_quantum_purse_phrase_parses_renders_and_seeds() {
+        // Exported from a throwaway Quantum Purse testnet wallet (SPHINCS+
+        // 128-bit level, three 12-word chunks). Each chunk's BIP39 checksum
+        // and the concatenated entropy were verified independently in Python
+        // against the official English wordlist; the seed is Lantern's
+        // PBKDF2 over the whole phrase, pinned with Python hashlib.
+        const QP_PHRASE: &str = "turtle grain panic appear measure very brick fatal possible absorb fashion circle farm hurdle oblige detail alert snap garage carbon total silent live nation shuffle account various live high voice juice useless suffer insane design blue";
+        const QP_ENTROPY: &str = "eaecb27e85489fe5c6ea9ca880194d14532df2609e20639a97d913e5d90e0ac9c76033c64156b9eade3780d8ae9cef0c";
+        const QP_SEED: &str = "c52a5905c175f43f5d3a11f350eed9b526f3619a931116e86e510d014770f23512f51322099bebeb43bb5b47f4a794e3fc9b0f9f1f7a7537e62cdc5c57a00429";
+
+        let entropy = parse_phrase(QP_PHRASE).expect("parses");
+        assert_eq!(hex::encode(&*entropy), QP_ENTROPY);
+        assert_eq!(
+            format_for_entropy(entropy.len()).expect("format"),
+            MnemonicFormat::Combined3
+        );
+        let rendered = render_phrase(&entropy).expect("renders");
+        assert_eq!(rendered.expose(), QP_PHRASE);
+        assert_eq!(rendered.word_count(), 36);
+        let seed = bip39_seed(&entropy).expect("seed");
+        assert_eq!(hex::encode(seed.expose_secret()), QP_SEED);
+    }
+
+    #[test]
     fn combined_72_words_round_trips() {
         let entropy = vec![0xffu8; 96];
         let phrase = render_phrase(&entropy).expect("renders");
