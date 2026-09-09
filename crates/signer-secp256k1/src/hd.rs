@@ -105,8 +105,9 @@ fn derive_child(parent: &ExtendedKey, index: u32) -> Result<ExtendedKey, SignerE
     };
     let mut left = [0u8; 32];
     left.copy_from_slice(&i[..32]);
-    let tweak = Scalar::from_be_bytes(left).map_err(|_| SignerError::InvalidKey)?;
+    let scalar_result = Scalar::from_be_bytes(left);
     left.zeroize();
+    let tweak = scalar_result.map_err(|_| SignerError::InvalidKey)?;
     let parent_sk =
         SecretKey::from_secret_bytes(parent.key).map_err(|_| SignerError::InvalidKey)?;
     let mut child_sk = parent_sk
