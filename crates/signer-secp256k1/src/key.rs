@@ -16,18 +16,24 @@ use crate::error::SignerError;
 pub struct SigningKey([u8; 32]);
 
 impl SigningKey {
-    /// Accepts the bytes by value and wipes the argument slot after copying
-    /// into the zeroizing wrapper.
+    /// Accepts the bytes by value and wipes the argument slot on both the
+    /// success and rejection paths, so rejected key bytes never linger on
+    /// the stack past this call.
     pub fn from_bytes(mut bytes: [u8; 32]) -> Result<Self, SignerError> {
-        let mut probe = SecretKey::from_secret_bytes(bytes).map_err(|_| SignerError::InvalidKey)?;
-        probe.non_secure_erase();
+        let probe = SecretKey::from_secret_bytes(bytes);
         let key = Self(bytes);
         bytes.zeroize();
-        Ok(key)
+        probe.map_or_else(
+            |_| Err(SignerError::InvalidKey), // `key` drops here and zeroizes
+            |mut valid| {
+                valid.non_secure_erase();
+                Ok(key)
+            },
+        )
     }
 
     /// Transient libsecp256k1 key. Callers must `non_secure_erase` it.
-    pub fn to_secp(&self) -> SecretKey {
+    pub(crate) fn to_secp(&self) -> SecretKey {
         SecretKey::from_secret_bytes(self.0).expect("validated at construction")
     }
 }
@@ -46,7 +52,7 @@ impl PublicKey {
         Ok(Self(bytes))
     }
 
-    pub fn from_secp(pk: &SecpPublicKey) -> Self {
+    pub(crate) fn from_secp(pk: &SecpPublicKey) -> Self {
         Self(pk.serialize())
     }
 }
