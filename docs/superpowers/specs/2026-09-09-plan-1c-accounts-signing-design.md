@@ -172,7 +172,7 @@ impl AccountRegistry {
     pub fn get(&self, id: &str) -> Option<&StoredAccount>
     pub fn set_label(&mut self, id: &str, label: &str) -> Result<(), RegistryError>
     pub fn remove(&mut self, id: &str) -> Result<StoredAccount, RegistryError>
-    pub fn next_index(&self, change: u32) -> u32                            // max derived index + 1, or 0
+    pub fn next_index(&self, lock_type: LockType, change: u32) -> u32       // max derived index + 1, or 0; scoped per lock type as well as branch
     pub fn save(&self) -> Result<(), RegistryError>
 }
 
@@ -186,7 +186,7 @@ The registry does not know any code hash. The caller passes the `ScriptTemplate`
 
 **Address.** CKB2021 full format: payload `0x00 ‖ code_hash ‖ hash_type ‖ args`, bech32m, hrp `ckb` or `ckt`. Hash type for the system secp lock is `type` (`0x01`).
 
-**Projection.** `to_record` computes `address` at read time so one stored record serves both networks. `public_metadata` carries `{ "derivation": { "change": 0, "index": i }, "lockArgs": "0x…" }`. The path string is lock-specific, so the registry stores the generic pair and the UI renders the path. `capabilities` comes from the module.
+**Projection.** `to_record` computes `address` at read time so one stored record serves both networks. `public_metadata` carries `{ "derivation": { "change": 0, "index": i }, "lockArgs": "0x…" }`. The path string is lock-specific, so the registry stores the generic pair and the UI renders the path. `capabilities` comes from the module. `to_record` returns `Result<AccountRecord, RegistryError>` and `WalletCore::accounts()` returns `Result<Vec<AccountRecord>, CoreError>` because address encoding is fallible.
 
 **File.** `accounts.json` is `{ "version": 1, "accounts": [...] }`. Writes go to `accounts.json.tmp` then `fs::rename`. A parse failure is `RegistryError::Corrupt` and is never silently replaced with an empty registry.
 
@@ -223,12 +223,12 @@ impl LockRegistry {
 
 pub struct WalletCore { vault: Vault, accounts: AccountRegistry, locks: LockRegistry, network: Network, paths: ProfilePaths }
 impl WalletCore {
-    pub fn create(paths, password, network, words) -> Result<(Self, Phrase), CoreError>
-    pub fn import(paths, password, network, phrase) -> Result<Self, CoreError>
+    pub fn create(paths, password, network, words) -> Result<(Self, Phrase), CoreError> // AlreadyInitialised if vault.bin OR accounts.json already exists
+    pub fn import(paths, password, network, phrase) -> Result<Self, CoreError>          // AlreadyInitialised if vault.bin OR accounts.json already exists
     pub fn unlock(paths, password, network) -> Result<Self, CoreError>
     pub fn create_account(&mut self, label: &str) -> Result<AccountRecord, CoreError>
-    pub fn accounts(&self) -> Vec<AccountRecord>
-    pub fn reveal_mnemonic(&self, password: &[u8]) -> Result<Phrase, CoreError>       // re-unlocks vault.bin with the password; WrongPassword otherwise
+    pub fn accounts(&self) -> Result<Vec<AccountRecord>, CoreError>
+    pub fn reveal_mnemonic(&mut self, password: &[u8]) -> Result<Phrase, CoreError>    // re-unlocks vault.bin with the password; WrongPassword otherwise
     pub fn lock(self)
     pub fn signer(&self) -> SigningCoordinator<'_>
     pub fn mnemonic_format(&self) -> Result<MnemonicFormat, CoreError>
@@ -245,7 +245,11 @@ impl SigningCoordinator<'_> {
 
 **Seed derivation.** `bip39_seed` computes `PBKDF2-HMAC-SHA512(password = NFKD(phrase), salt = "mnemonic", 2048 rounds, 64 bytes)` over the full phrase text, whatever its length. For 12 to 24 words this is exactly BIP39. For combined phrases it is Lantern's defined generalisation; no other wallet defines a secp seed for those, so there is no compatibility target to miss. Implemented once with the `pbkdf2` and `sha2` crates rather than via `bip39::Mnemonic::to_seed`, which cannot see a combined phrase. `entropy` returns the stored bytes untouched; that is what a SPHINCS+ or ML-DSA module will HKDF over, matching Quantum Purse's key tree.
 
-**Signing.** `sign_digest` resolves the record, looks up the module by `lock_type` (`UnsupportedLock` if absent), asks the keyring for `seed_for(module.seed_kind())`, calls `module.sign_digest(seed, derivation, digest)`, and lets the `SecretSlice` drop. The coordinator never names secp256k1. `create_account` does the same lookup, uses `accounts.next_index(0)`, calls `module.derive_lock_args`, stores the record, saves, and returns `to_record` built with the module's template and capabilities. `Phrase` wraps a `SecretString`; `WalletCore::create` returns it exactly once for the show-and-confirm flow in spec §21.
+**Signing.** `sign_digest` resolves the record, looks up the module by `lock_type` (`UnsupportedLock` if absent), asks the keyring for `seed_for(module.seed_kind())`, calls `module.sign_digest(seed, derivation, digest)`, and lets the `SecretSlice` drop. The coordinator never names secp256k1. `create_account` does the same lookup, uses `accounts.next_index(module.lock_type(), 0)` so two lock modules sharing a seed number their accounts independently, calls `module.derive_lock_args`, stores the record, saves, and returns `to_record` built with the module's template and capabilities. `Phrase` wraps a `SecretString`; `WalletCore::create` returns it exactly once for the show-and-confirm flow in spec §21.
+
+**Re-revealing the mnemonic.** `reveal_mnemonic` takes `&mut self`, not `&self`: it opens a second, temporary `Vault` from disk to re-prove the password, and that vault's page-lock guards can unlock pages the live vault's own master key or blobs share (locks are per page, not reference-counted — see §4.5). After the temporary vault drops, `reveal_mnemonic` calls `self.vault.relock()` to restore the live vault's guarantees, which requires exclusive access.
+
+**Refusing a stale profile.** `create` and `import` refuse when *either* `paths.vault` or `paths.accounts` already exists, not just the vault file — a directory that somehow has an `accounts.json` but no `vault.bin` (e.g. a partially cleaned-up profile) must not be silently adopted by a fresh `create`/`import`.
 
 New dependencies: `lantern-vault`, `lantern-account-registry`, `lantern-signer-secp256k1`, `lantern-sdk-schema`, `bip39` 2.2 (`rand`, `zeroize`), `pbkdf2`, `sha2`, `unicode-normalization`, `secrecy`, `zeroize`.
 
