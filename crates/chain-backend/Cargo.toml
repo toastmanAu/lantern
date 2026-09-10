@@ -11,6 +11,11 @@ description = "Lantern chain backend — abstraction over light client / full no
 [lints]
 workspace = true
 
+[[bin]]
+name = "fake_light_client"
+path = "src/bin/fake_light_client.rs"
+required-features = ["testing"]
+
 [dependencies]
 lantern-sdk-schema = { path = "../sdk-schema" }
 ckb-jsonrpc-types.workspace = true

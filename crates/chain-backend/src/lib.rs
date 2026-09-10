@@ -18,6 +18,7 @@ pub mod indexer;
 pub mod light;
 pub mod query;
 pub mod rpc;
+pub mod supervisor;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
@@ -31,6 +32,7 @@ pub use indexer::{IndexerCell, Order, Pagination, ScriptStatus, ScriptType, Sear
 pub use light::LightRpc;
 pub use query::{CellQuery, WatchedScript};
 pub use rpc::RpcClient;
+pub use supervisor::{Supervisor, SupervisorConfig, SupervisorHealth};
 
 // Re-exported so downstream crates need not depend on `ckb-jsonrpc-types`
 // directly; these are the only chain types this crate's API exposes.
