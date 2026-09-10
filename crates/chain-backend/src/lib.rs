@@ -10,6 +10,7 @@
 
 pub mod cursor;
 pub mod error;
+pub mod full;
 pub mod indexer;
 pub mod light;
 pub mod query;
@@ -19,6 +20,7 @@ pub mod testing;
 
 pub use cursor::{CellPage, Cursor};
 pub use error::BackendError;
+pub use full::FullRpc;
 pub use indexer::{IndexerCell, Order, Pagination, ScriptStatus, ScriptType, SearchKey, Tip};
 pub use light::LightRpc;
 pub use query::{CellQuery, WatchedScript};
