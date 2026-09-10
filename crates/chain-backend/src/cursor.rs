@@ -9,7 +9,7 @@
 //! and a sentinel is not a cursor — and the private fields are what keep it
 //! that way.
 
-use serde_json::Value;
+use crate::indexer::IndexerCell;
 
 /// A resumable paging position.
 ///
@@ -45,7 +45,7 @@ impl Cursor {
 /// when the page came back empty and when the node handed back a sentinel.
 #[derive(Debug, Clone)]
 pub struct CellPage {
-    cells: Vec<Value>,
+    cells: Vec<IndexerCell>,
     next: Option<Cursor>,
 }
 
@@ -53,7 +53,7 @@ impl CellPage {
     /// The only way to build a page, and the single enforcement point for
     /// both cursor rules. The fields are private precisely so this cannot be
     /// sidestepped with a struct literal.
-    pub fn new(cells: Vec<Value>, last_cursor: &str) -> Self {
+    pub fn new(cells: Vec<IndexerCell>, last_cursor: &str) -> Self {
         let next = if cells.is_empty() {
             None
         } else {
@@ -62,13 +62,13 @@ impl CellPage {
         Self { cells, next }
     }
 
-    pub fn cells(&self) -> &[Value] {
+    pub fn cells(&self) -> &[IndexerCell] {
         &self.cells
     }
 
     /// Take ownership of the rows, for callers accumulating across pages.
     #[must_use]
-    pub fn into_cells(self) -> Vec<Value> {
+    pub fn into_cells(self) -> Vec<IndexerCell> {
         self.cells
     }
 
@@ -85,6 +85,7 @@ impl CellPage {
 #[cfg(test)]
 mod tests {
     use super::{CellPage, Cursor};
+    use crate::indexer::sample_cell;
 
     // The exact byte string a real testnet node returned mid-scan.
     const REAL: &str = "0x409bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801";
@@ -118,7 +119,7 @@ mod tests {
 
     #[test]
     fn a_full_page_carries_its_cursor() {
-        let page = CellPage::new(vec![serde_json::json!({"cell": 1})], REAL);
+        let page = CellPage::new(vec![sample_cell()], REAL);
         assert_eq!(page.cells().len(), 1);
         assert_eq!(page.next().map(Cursor::as_str), Some(REAL));
         assert!(!page.is_exhausted());
@@ -129,7 +130,7 @@ mod tests {
         // Replays what testnet actually does: a full page, then an empty page
         // whose last_cursor is "0x". A pager driven by `next` must stop, and
         // must not have retained anything to feed back in.
-        let page1 = CellPage::new(vec![serde_json::json!({"cell": 1})], REAL);
+        let page1 = CellPage::new(vec![sample_cell()], REAL);
         assert!(page1.next().is_some(), "first page continues");
         let page2 = CellPage::new(Vec::new(), "0x");
         assert!(page2.next().is_none(), "exhausted scan stops");
@@ -140,7 +141,7 @@ mod tests {
     fn a_non_empty_page_with_a_sentinel_cursor_also_stops() {
         // Defence in depth: if a node ever returns rows plus "0x", resuming
         // from "0x" would return nothing, so treat it as exhausted.
-        let page = CellPage::new(vec![serde_json::json!({"cell": 1})], "0x");
+        let page = CellPage::new(vec![sample_cell()], "0x");
         assert_eq!(page.cells().len(), 1, "rows are still delivered");
         assert!(page.next().is_none(), "but the scan does not continue");
     }
