@@ -2059,6 +2059,7 @@ dependencies = [
  "pbkdf2",
  "rand 0.8.5",
  "secrecy",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",

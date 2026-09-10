@@ -236,3 +236,35 @@ fn unlock_accepts_an_untouched_registry_with_several_accounts() {
     let core = WalletCore::unlock(paths, b"pw", Network::Testnet).expect("opens");
     assert_eq!(core.accounts().expect("lists").len(), 3);
 }
+
+#[test]
+fn nulling_the_derivation_does_not_smuggle_a_swapped_address_past_verification() {
+    let dir = tempdir().expect("tempdir");
+    let paths = ProfilePaths::in_dir(dir.path());
+    {
+        let mut core =
+            WalletCore::import(paths.clone(), b"pw", Network::Testnet, TANK).expect("imports");
+        core.create_account("Main").expect("account");
+        core.lock();
+    }
+    // The full attack: swap the address AND null the derivation, so a
+    // verifier that skips underivable accounts would wave it through.
+    let text = std::fs::read_to_string(&paths.accounts).expect("reads");
+    let mut file: serde_json::Value = serde_json::from_str(&text).expect("parses");
+    let account = file["accounts"]
+        .as_array_mut()
+        .expect("accounts array")
+        .get_mut(0)
+        .expect("one account");
+    account["lockArgs"] = serde_json::Value::String("ab".repeat(20));
+    account["derivation"] = serde_json::Value::Null;
+    let attacked = serde_json::to_string_pretty(&file).expect("serializes");
+    assert_ne!(attacked, text, "the fixture must actually change");
+    std::fs::write(&paths.accounts, attacked).expect("writes");
+
+    match WalletCore::unlock(paths, b"pw", Network::Testnet) {
+        // A parse rejection (`Registry`) is also a refusal.
+        Err(CoreError::RegistryMismatch { .. } | CoreError::Registry(_)) => {}
+        other => panic!("a nulled derivation must not be trusted, got {other:?}"),
+    }
+}

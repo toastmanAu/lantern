@@ -138,18 +138,25 @@ impl WalletCore {
         })
     }
 
-    /// Re-derive each derived account and compare against what is stored.
+    /// Re-derive each account and compare against what is stored.
     ///
-    /// Accounts without a `Derivation` (watch-only, later hardware) carry no
-    /// derivable material and are skipped rather than rejected.
+    /// An account with no `Derivation` is a mismatch, not a skip: nothing in
+    /// the wallet creates one today, and skipping it would let an attacker
+    /// null the field to smuggle a swapped `lock_args` past verification.
     fn verify_registry(
         vault: &Vault,
         accounts: &AccountRegistry,
         locks: &LockRegistry,
     ) -> Result<(), CoreError> {
         for account in accounts.list() {
+            // An account with no derivation cannot be re-derived, and nothing
+            // in the wallet creates one. Treating it as unverifiable rather
+            // than as trusted closes an otherwise trivial bypass: an attacker
+            // could null the derivation and swap the lock args in one edit.
             let Some(derivation) = account.derivation else {
-                continue;
+                return Err(CoreError::RegistryMismatch {
+                    account_id: account.id.clone(),
+                });
             };
             let module = locks.get(account.lock_type)?;
             let seed = Keyring::seed_for(vault, module.seed_kind())?;
