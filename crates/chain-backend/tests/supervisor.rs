@@ -4,7 +4,9 @@
 
 use std::time::Duration;
 
-use lantern_chain_backend::supervisor::{Supervisor, SupervisorConfig, SupervisorHealth};
+use lantern_chain_backend::supervisor::{
+    ShutdownKind, Supervisor, SupervisorConfig, SupervisorHealth,
+};
 use lantern_sdk_schema::Network;
 
 fn config(dir: &std::path::Path) -> SupervisorConfig {
@@ -104,4 +106,21 @@ async fn stopping_twice_is_harmless() {
     sup.stop().await.expect("first stop");
     sup.stop().await.expect("second stop is a no-op");
     assert!(matches!(sup.health(), SupervisorHealth::Stopped));
+}
+
+#[tokio::test]
+async fn a_well_behaved_child_is_stopped_gracefully_not_killed() {
+    // The stub has no SIGTERM handler, so the default disposition ends it
+    // immediately — inside the grace window. If the SIGTERM were removed the
+    // stub would keep serving, the window would elapse, and this would record
+    // `Forced` instead. That is what makes this test load-bearing rather than
+    // decorative.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sup = Supervisor::start(config(dir.path())).await.expect("starts");
+    sup.stop().await.expect("stops");
+    assert_eq!(
+        sup.last_shutdown(),
+        Some(ShutdownKind::Graceful),
+        "the child should have exited on the signal, not needed killing"
+    );
 }

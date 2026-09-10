@@ -48,6 +48,20 @@ pub struct SupervisorConfig {
     pub extra_env: Vec<(String, String)>,
 }
 
+/// How the last shutdown actually went.
+///
+/// This is what makes the graceful path falsifiable: a child that receives
+/// `SIGTERM` exits inside the grace window, while one that never receives it
+/// keeps serving until the window elapses and gets killed. Without this
+/// distinction, removing the signal would leave every test still green.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownKind {
+    /// Exited on its own after `SIGTERM`, within the grace period.
+    Graceful,
+    /// Ignored or never received the signal and had to be killed.
+    Forced,
+}
+
 /// A running light-client process.
 pub struct Supervisor {
     child: Option<Child>,
@@ -55,6 +69,7 @@ pub struct Supervisor {
     health: SupervisorHealth,
     log_tasks: Vec<JoinHandle<()>>,
     config: SupervisorConfig,
+    last_shutdown: Option<ShutdownKind>,
 }
 
 impl std::fmt::Debug for Supervisor {
@@ -141,6 +156,7 @@ impl Supervisor {
             health: SupervisorHealth::Running { restarts: 0 },
             log_tasks,
             config,
+            last_shutdown: None,
         };
 
         if let Err(e) = supervisor.await_ready().await {
@@ -159,14 +175,25 @@ impl Supervisor {
         self.health.clone()
     }
 
+    /// How the most recent call to `stop` actually shut the child down.
+    ///
+    /// `None` until `stop` has been called at least once.
+    pub const fn last_shutdown(&self) -> Option<ShutdownKind> {
+        self.last_shutdown
+    }
+
     /// Stop the child: `SIGTERM`, a grace period, then `SIGKILL`.
     ///
     /// On Unix the child is asked to exit cleanly first, so its store isn't
-    /// left mid-write; Windows has no `SIGTERM`, so it goes straight to a
-    /// hard kill. Either way the child is always reaped, log forwarding is
-    /// always aborted, and health always ends at `Stopped`.
+    /// left mid-write, and only then does it get a grace window to act on
+    /// the signal. Windows has no `SIGTERM` — and any Unix child that could
+    /// not be signalled either — so those go straight to a hard kill instead
+    /// of waiting out a grace period for a signal that was never sent.
+    /// Either way the child is always reaped, log forwarding is always
+    /// aborted, and health always ends at `Stopped`.
     ///
-    /// Idempotent — calling it on an already-stopped supervisor succeeds.
+    /// Idempotent — calling it on an already-stopped supervisor succeeds and
+    /// leaves `last_shutdown` at whatever the first call recorded.
     pub async fn stop(&mut self) -> Result<(), BackendError> {
         for task in self.log_tasks.drain(..) {
             task.abort();
@@ -176,20 +203,33 @@ impl Supervisor {
             return Ok(());
         };
 
+        let mut signalled = false;
         if cfg!(unix)
             && let Some(pid) = child.id()
-            && let Err(e) = request_termination(pid)
         {
-            tracing::debug!("SIGTERM failed, falling through to kill: {e}");
+            match request_termination(pid) {
+                Ok(()) => signalled = true,
+                Err(e) => tracing::debug!("SIGTERM failed, falling through to kill: {e}"),
+            }
         }
 
-        if let Ok(Ok(status)) = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await {
-            tracing::debug!("light client exited with {status}");
+        let shutdown_kind = if signalled {
+            if let Ok(Ok(status)) = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await {
+                tracing::debug!("light client exited with {status}");
+                ShutdownKind::Graceful
+            } else {
+                tracing::warn!("light client did not exit in time; killing");
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                ShutdownKind::Forced
+            }
         } else {
-            tracing::warn!("light client did not exit in time; killing");
             let _ = child.kill().await;
             let _ = child.wait().await;
-        }
+            ShutdownKind::Forced
+        };
+
+        self.last_shutdown = Some(shutdown_kind);
         self.health = SupervisorHealth::Stopped;
         Ok(())
     }
