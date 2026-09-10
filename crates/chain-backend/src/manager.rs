@@ -277,13 +277,90 @@ impl BackendManager {
 
 #[cfg(test)]
 mod tests {
-    use lantern_sdk_schema::{BackendKind, BackendProfile, Network};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use async_trait::async_trait;
+    use ckb_jsonrpc_types::{HeaderView, Transaction, TransactionWithStatusResponse};
+    use ckb_types::H256;
+    use lantern_sdk_schema::{
+        BackendCapabilities, BackendKind, BackendProfile, BackendStatus, Network,
+    };
     use serde_json::json;
     use tempfile::tempdir;
 
     use super::BackendManager;
+    use crate::backend::ChainBackend;
+    use crate::backends::RemoteLight;
+    use crate::cursor::{CellPage, Cursor};
     use crate::error::BackendError;
+    use crate::query::{CellQuery, WatchedScript};
     use crate::testing::FakeNode;
+
+    /// Records whether `stop()` was called, nothing else. Exists to answer
+    /// exactly one question: does the manager call `stop()` on the backend it
+    /// is discarding? The five query methods are never exercised by these
+    /// tests, so they `unimplemented!()` — a panic naming the method beats a
+    /// silent `Ok` if a future refactor makes the manager query a backend on
+    /// its way out.
+    struct SpyBackend {
+        stopped: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl ChainBackend for SpyBackend {
+        fn kind(&self) -> BackendKind {
+            BackendKind::RemoteFull
+        }
+
+        fn network(&self) -> Network {
+            Network::Testnet
+        }
+
+        fn capabilities(&self) -> BackendCapabilities {
+            RemoteLight::light_capabilities()
+        }
+
+        async fn status(&self) -> BackendStatus {
+            BackendStatus::Stopped
+        }
+
+        async fn tip_header(&self) -> Result<HeaderView, BackendError> {
+            unimplemented!("SpyBackend: tip_header is not exercised by the stop() tests")
+        }
+
+        async fn get_cells(
+            &self,
+            _query: &CellQuery,
+            _after: Option<&Cursor>,
+        ) -> Result<CellPage, BackendError> {
+            unimplemented!("SpyBackend: get_cells is not exercised by the stop() tests")
+        }
+
+        async fn get_transaction(
+            &self,
+            _hash: &H256,
+        ) -> Result<Option<TransactionWithStatusResponse>, BackendError> {
+            unimplemented!("SpyBackend: get_transaction is not exercised by the stop() tests")
+        }
+
+        async fn send_transaction(&self, _tx: &Transaction) -> Result<H256, BackendError> {
+            unimplemented!("SpyBackend: send_transaction is not exercised by the stop() tests")
+        }
+
+        async fn watch_scripts(&self, _scripts: &[WatchedScript]) -> Result<(), BackendError> {
+            unimplemented!("SpyBackend: watch_scripts is not exercised by the stop() tests")
+        }
+
+        async fn start(&self) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        async fn stop(&self) -> Result<(), BackendError> {
+            self.stopped.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     fn profile(id: &str, network: Network, kind: BackendKind) -> BackendProfile {
         BackendProfile {
@@ -440,5 +517,70 @@ mod tests {
             Network::Testnet,
             "activation switches the active network to the new profile's"
         );
+    }
+
+    #[tokio::test]
+    async fn removing_the_active_profile_stops_its_backend() {
+        let dir = tempdir().expect("tempdir");
+        let mut manager = BackendManager::open(dir.path().join("backends.json")).expect("opens");
+        manager
+            .add_profile(profile("spy", Network::Testnet, BackendKind::RemoteFull))
+            .expect("adds");
+
+        let stopped = Arc::new(AtomicBool::new(false));
+        manager
+            .activate_backend(
+                "spy",
+                Box::new(SpyBackend {
+                    stopped: stopped.clone(),
+                }),
+            )
+            .await
+            .expect("adopts the spy");
+        assert!(
+            !stopped.load(Ordering::SeqCst),
+            "the spy must not start out stopped, or the assertion below proves nothing"
+        );
+
+        manager.remove_profile("spy").await.expect("removes");
+
+        assert!(
+            stopped.load(Ordering::SeqCst),
+            "removing the active profile must stop its backend"
+        );
+        assert!(manager.current_backend().is_none());
+        assert!(!manager.profiles().iter().any(|p| p.id == "spy"));
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_the_active_backend() {
+        let dir = tempdir().expect("tempdir");
+        let mut manager = BackendManager::open(dir.path().join("backends.json")).expect("opens");
+        manager
+            .add_profile(profile("spy", Network::Testnet, BackendKind::RemoteFull))
+            .expect("adds");
+
+        let stopped = Arc::new(AtomicBool::new(false));
+        manager
+            .activate_backend(
+                "spy",
+                Box::new(SpyBackend {
+                    stopped: stopped.clone(),
+                }),
+            )
+            .await
+            .expect("adopts the spy");
+        assert!(
+            !stopped.load(Ordering::SeqCst),
+            "the spy must not start out stopped, or the assertion below proves nothing"
+        );
+
+        manager.shutdown().await.expect("shuts down");
+
+        assert!(
+            stopped.load(Ordering::SeqCst),
+            "shutdown must stop the active backend"
+        );
+        assert!(manager.current_backend().is_none());
     }
 }
