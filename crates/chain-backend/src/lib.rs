@@ -8,6 +8,8 @@
 //! the UI can disable what a backend cannot do instead of failing at call
 //! time.
 
+pub mod backend;
+pub mod backends;
 pub mod cursor;
 pub mod error;
 pub mod full;
@@ -18,6 +20,8 @@ pub mod rpc;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+pub use backend::ChainBackend;
+pub use backends::RemoteLight;
 pub use cursor::{CellPage, Cursor};
 pub use error::BackendError;
 pub use full::FullRpc;
