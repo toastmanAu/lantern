@@ -22,6 +22,14 @@ struct BackendsFile {
     profiles: Vec<BackendProfile>,
 }
 
+/// What `activate` resolved to build, before it tears down the outgoing
+/// backend. Kept as an owned plan rather than a borrow of the profile so the
+/// teardown below does not need to hold `profile` alive across the `await`.
+enum ActivationTarget {
+    RemoteLight { endpoint: String },
+    Full { kind: BackendKind, endpoint: String },
+}
+
 /// Owns the backend profiles and whichever one is live.
 pub struct BackendManager {
     path: PathBuf,
@@ -97,11 +105,11 @@ impl BackendManager {
 
     /// # Errors
     ///
-    /// Returns [`BackendError::Corrupt`] if a profile with the same id is
-    /// already registered.
+    /// Returns [`BackendError::DuplicateProfile`] if a profile with the same
+    /// id is already registered.
     pub fn add_profile(&mut self, profile: BackendProfile) -> Result<(), BackendError> {
         if self.profiles.iter().any(|p| p.id == profile.id) {
-            return Err(BackendError::Corrupt);
+            return Err(BackendError::DuplicateProfile);
         }
         self.profiles.push(profile);
         Ok(())
@@ -109,18 +117,24 @@ impl BackendManager {
 
     /// # Errors
     ///
-    /// Returns [`BackendError::ProfileNotFound`] if no profile has this id.
-    pub fn remove_profile(&mut self, id: &str) -> Result<(), BackendError> {
+    /// Returns [`BackendError::ProfileNotFound`] if no profile has this id,
+    /// or whatever error stopping the active backend produces if the
+    /// removed profile is the one currently running. On a `stop()` failure
+    /// the profile list is left untouched, so a failed graceful shutdown
+    /// never silently edits the list out from under a still-running backend.
+    pub async fn remove_profile(&mut self, id: &str) -> Result<(), BackendError> {
         let index = self
             .profiles
             .iter()
             .position(|p| p.id == id)
             .ok_or(BackendError::ProfileNotFound)?;
-        self.profiles.remove(index);
         if self.active_id.as_deref() == Some(id) {
+            if let Some(active) = self.active.take() {
+                active.stop().await?;
+            }
             self.active_id = None;
-            self.active = None;
         }
+        self.profiles.remove(index);
         Ok(())
     }
 
@@ -156,34 +170,47 @@ impl BackendManager {
             .ok_or(BackendError::ProfileNotFound)?
             .clone();
 
+        // Resolve everything that can fail without I/O first: an embedded
+        // profile or a missing endpoint is a caller mistake, not a transport
+        // failure, and must not cost the user a working connection just to
+        // discover it. `activate_backend` already gets this right for the
+        // embedded path; this mirrors it here.
+        let target = match profile.kind {
+            BackendKind::RemoteLight => ActivationTarget::RemoteLight {
+                endpoint: profile.endpoint.clone().ok_or(BackendError::Unsupported(
+                    "remote backend without an endpoint",
+                ))?,
+            },
+            BackendKind::LocalFull | BackendKind::RemoteFull => ActivationTarget::Full {
+                kind: profile.kind,
+                endpoint: profile.endpoint.clone().ok_or(BackendError::Unsupported(
+                    "remote backend without an endpoint",
+                ))?,
+            },
+            BackendKind::EmbeddedLight => {
+                return Err(BackendError::Unsupported(
+                    "embedded light client needs a binary path; construct it directly",
+                ));
+            }
+        };
+
+        // Only now tear down. If construction or `start()` below still
+        // fails, the old backend is already stopped — accepted, because that
+        // is an I/O failure rather than a caller mistake, and keeping the
+        // old backend alive while connecting the new one risks two
+        // supervised `ckb-light-client` children running at once, which is
+        // worse. Do not "fix" this into a double-spawn.
         if let Some(active) = self.active.take() {
             active.stop().await?;
         }
         self.active_id = None;
 
-        let backend: Box<dyn ChainBackend> = match profile.kind {
-            BackendKind::RemoteLight => {
-                let endpoint = profile
-                    .endpoint
-                    .as_deref()
-                    .ok_or(BackendError::Unsupported(
-                        "remote backend without an endpoint",
-                    ))?;
+        let backend: Box<dyn ChainBackend> = match target {
+            ActivationTarget::RemoteLight { endpoint } => {
                 Box::new(RemoteLight::new(profile.network, endpoint)?)
             }
-            BackendKind::LocalFull | BackendKind::RemoteFull => {
-                let endpoint = profile
-                    .endpoint
-                    .as_deref()
-                    .ok_or(BackendError::Unsupported(
-                        "remote backend without an endpoint",
-                    ))?;
-                Box::new(FullNode::connect(profile.network, profile.kind, endpoint).await?)
-            }
-            BackendKind::EmbeddedLight => {
-                return Err(BackendError::Unsupported(
-                    "embedded light client needs a binary path; construct it directly",
-                ));
+            ActivationTarget::Full { kind, endpoint } => {
+                Box::new(FullNode::connect(profile.network, kind, endpoint).await?)
             }
         };
         backend.start().await?;
@@ -251,10 +278,12 @@ impl BackendManager {
 #[cfg(test)]
 mod tests {
     use lantern_sdk_schema::{BackendKind, BackendProfile, Network};
+    use serde_json::json;
     use tempfile::tempdir;
 
     use super::BackendManager;
     use crate::error::BackendError;
+    use crate::testing::FakeNode;
 
     fn profile(id: &str, network: Network, kind: BackendKind) -> BackendProfile {
         BackendProfile {
@@ -300,8 +329,8 @@ mod tests {
         assert!(manager.profiles().iter().any(|p| p.id == "pi"));
     }
 
-    #[test]
-    fn duplicate_and_missing_profile_ids_are_rejected() {
+    #[tokio::test]
+    async fn duplicate_and_missing_profile_ids_are_rejected() {
         let dir = tempdir().expect("tempdir");
         let mut manager = BackendManager::open(dir.path().join("backends.json")).expect("opens");
         manager
@@ -309,10 +338,10 @@ mod tests {
             .expect("adds");
         assert!(matches!(
             manager.add_profile(profile("pi", Network::Mainnet, BackendKind::RemoteFull)),
-            Err(BackendError::Corrupt)
+            Err(BackendError::DuplicateProfile)
         ));
         assert!(matches!(
-            manager.remove_profile("nope"),
+            manager.remove_profile("nope").await,
             Err(BackendError::ProfileNotFound)
         ));
     }
@@ -321,24 +350,34 @@ mod tests {
     fn a_corrupt_or_future_file_is_refused_not_replaced() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("backends.json");
-        std::fs::write(&path, "{ not json").expect("writes");
+
+        let corrupt = b"{ not json".to_vec();
+        std::fs::write(&path, &corrupt).expect("writes");
         assert!(matches!(
             BackendManager::open(&path),
             Err(BackendError::Corrupt)
         ));
-        std::fs::write(
-            &path,
-            r#"{"version": 2, "activeProfileId": "x", "profiles": []}"#,
-        )
-        .expect("writes");
+        assert_eq!(
+            std::fs::read(&path).expect("reads"),
+            corrupt,
+            "a failed open must not touch the file on disk"
+        );
+
+        let future_version = br#"{"version": 2, "activeProfileId": "x", "profiles": []}"#.to_vec();
+        std::fs::write(&path, &future_version).expect("writes");
         assert!(matches!(
             BackendManager::open(&path),
             Err(BackendError::Corrupt)
         ));
+        assert_eq!(
+            std::fs::read(&path).expect("reads"),
+            future_version,
+            "a failed open must not touch the file on disk"
+        );
     }
 
     #[tokio::test]
-    async fn activating_a_profile_switches_the_active_network() {
+    async fn activating_an_unreachable_profile_fails_and_leaves_nothing_connected() {
         let dir = tempdir().expect("tempdir");
         let mut manager = BackendManager::open(dir.path().join("backends.json")).expect("opens");
         // Point at a dead port: activation of a remote backend must fail
@@ -353,6 +392,53 @@ mod tests {
         assert!(
             manager.current_backend().is_none(),
             "a failed activation leaves nothing active"
+        );
+    }
+
+    #[tokio::test]
+    async fn activating_a_profile_switches_the_active_network() {
+        let dir = tempdir().expect("tempdir");
+        let mut manager = BackendManager::open(dir.path().join("backends.json")).expect("opens");
+        assert_eq!(
+            manager.current_network(),
+            Network::Mainnet,
+            "default-mainnet is active before any activation"
+        );
+
+        let node = FakeNode::builder()
+            .respond(
+                "local_node_info",
+                json!({
+                    "version": "0.5.5",
+                    "node_id": "QmTestNode",
+                    "active": true,
+                    "addresses": [],
+                    "protocols": [],
+                    "connections": "0x0"
+                }),
+            )
+            .start()
+            .await;
+        manager
+            .add_profile(BackendProfile {
+                endpoint: Some(node.url()),
+                ..profile("remote-testnet", Network::Testnet, BackendKind::RemoteLight)
+            })
+            .expect("adds");
+
+        manager
+            .activate("remote-testnet")
+            .await
+            .expect("activation succeeds against a reachable fake node");
+
+        assert!(
+            manager.current_backend().is_some(),
+            "a successful activation leaves a backend connected"
+        );
+        assert_eq!(
+            manager.current_network(),
+            Network::Testnet,
+            "activation switches the active network to the new profile's"
         );
     }
 }

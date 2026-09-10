@@ -33,6 +33,9 @@ pub enum BackendError {
 
     #[error("no backend profile with that id")]
     ProfileNotFound,
+
+    #[error("a backend profile with that id already exists")]
+    DuplicateProfile,
 }
 
 #[cfg(test)]
