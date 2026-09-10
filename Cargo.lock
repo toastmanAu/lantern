@@ -2408,8 +2408,6 @@ name = "lantern-wallet-core"
 version = "0.0.3"
 dependencies = [
  "bip39",
- "ckb-jsonrpc-types",
- "ckb-types",
  "hex",
  "lantern-account-registry",
  "lantern-chain-backend",

@@ -39,6 +39,7 @@ pub use supervisor::{Supervisor, SupervisorConfig, SupervisorHealth};
 // Re-exported so downstream crates need not depend on `ckb-jsonrpc-types`
 // directly; these are the only chain types this crate's API exposes.
 pub use ckb_jsonrpc_types::{
-    CellOutput, HeaderView, JsonBytes, OutPoint, Script, Transaction, TransactionWithStatusResponse,
+    CellOutput, HeaderView, JsonBytes, OutPoint, Script, ScriptHashType, Transaction,
+    TransactionWithStatusResponse,
 };
 pub use ckb_types::H256;

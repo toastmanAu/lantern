@@ -17,8 +17,6 @@ lantern-vault = { path = "../vault" }
 lantern-account-registry = { path = "../account-registry" }
 lantern-signer-secp256k1 = { path = "../signer-secp256k1" }
 lantern-chain-backend = { path = "../chain-backend" }
-ckb-jsonrpc-types.workspace = true
-ckb-types.workspace = true
 bip39.workspace = true
 pbkdf2.workspace = true
 sha2.workspace = true

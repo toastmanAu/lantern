@@ -302,16 +302,66 @@ fn an_imported_wallet_scans_from_genesis_and_a_created_one_defers() {
     );
 }
 
+/// Asserts a `set_scripts` call registered exactly two distinct scripts,
+/// each at `expected_tip_hex`, via `partial` (never `all`), each a `lock`
+/// with `ScriptHashType::Type`. Split out of the test body so the test
+/// itself stays under clippy's line-count lint.
+fn assert_registered_two_distinct_scripts(params: &[serde_json::Value], expected_tip_hex: &str) {
+    assert_eq!(
+        params[1], "partial",
+        "`all` would wipe every script on a shared light client"
+    );
+    let scripts = params[0].as_array().expect("scripts is an array");
+    assert_eq!(
+        scripts.len(),
+        2,
+        "both accounts must be registered, not just the first"
+    );
+    let mut all_args = Vec::new();
+    for entry in scripts {
+        assert_eq!(
+            entry["block_number"], expected_tip_hex,
+            "registration must run after height resolution — if it ran first, \
+             watch_from_block would still be None and this would be \"0x0\""
+        );
+        assert_eq!(entry["script_type"], "lock");
+        assert_eq!(
+            entry["script"]["hash_type"], "type",
+            "the secp256k1 module uses ScriptHashType::Type"
+        );
+        all_args.push(
+            entry["script"]["args"]
+                .as_str()
+                .expect("args is a string")
+                .to_string(),
+        );
+    }
+    assert_ne!(
+        all_args[0], all_args[1],
+        "the two accounts must not have been registered as the same script"
+    );
+}
+
 #[tokio::test]
 async fn syncing_resolves_heights_and_registers_every_script() {
     use lantern_chain_backend::testing::FakeNode;
 
+    // `RemoteLight`, not `RemoteFull`: `FullNode::watch_scripts` is an
+    // unconditional no-op (a full node indexes everything), so a test built
+    // on it could not tell a real registration from a deleted one. A light
+    // client's `watch_scripts` really issues `set_scripts` over the wire —
+    // that is the call this test pins.
     let node = FakeNode::builder()
+        // `RemoteLight::start()` probes this to confirm the endpoint answers.
         .respond(
-            "get_indexer_tip",
+            "local_node_info",
             serde_json::json!({
-                "block_hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
-                "block_number": "0x1554ef4"
+                "version": "0.5.5",
+                "node_id": "QmTestNode",
+                "active": true,
+                "addresses": [],
+                "protocols": [],
+                "connections": "0x0"
             }),
         )
         .respond(
@@ -327,20 +377,7 @@ async fn syncing_resolves_heights_and_registers_every_script() {
                 "version": "0x0"
             }),
         )
-        // `BackendManager::activate` calls `FullNode::start()`, which probes
-        // `local_node_info` — the brief's mock omitted this route, and the
-        // fake node returns an RPC error for any unmocked method.
-        .respond(
-            "local_node_info",
-            serde_json::json!({
-                "version": "0.5.5",
-                "node_id": "QmTestNode",
-                "active": true,
-                "addresses": [],
-                "protocols": [],
-                "connections": "0x0"
-            }),
-        )
+        .respond("set_scripts", serde_json::json!(null))
         .start()
         .await;
 
@@ -349,7 +386,12 @@ async fn syncing_resolves_heights_and_registers_every_script() {
     let (mut core, _phrase) =
         WalletCore::create(paths, b"pw", Network::Testnet, WordCount::Words12).expect("creates");
     let account = core.create_account("Fresh").expect("account");
+    let second = core.create_account("Second").expect("second account");
     assert_eq!(core.watch_from_block(&account.id).expect("known"), None);
+    assert_ne!(
+        account.id, second.id,
+        "the loop must be proven over more than one account"
+    );
 
     let mut manager = lantern_chain_backend::BackendManager::open(dir.path().join("backends.json"))
         .expect("manager");
@@ -358,7 +400,7 @@ async fn syncing_resolves_heights_and_registers_every_script() {
             id: "fake".into(),
             label: "fake".into(),
             network: Network::Testnet,
-            kind: lantern_sdk_schema::BackendKind::RemoteFull,
+            kind: lantern_sdk_schema::BackendKind::RemoteLight,
             endpoint: Some(node.url()),
         })
         .expect("adds");
@@ -372,6 +414,16 @@ async fn syncing_resolves_heights_and_registers_every_script() {
         "the deferred height resolved to the tip"
     );
 
+    let (_, params) = node
+        .calls()
+        .into_iter()
+        .find(|(method, _)| method == "set_scripts")
+        .expect("watch_scripts must actually call set_scripts");
+    assert_registered_two_distinct_scripts(
+        params.as_array().expect("params is an array"),
+        "0x1554ef4",
+    );
+
     // Resolved heights persist, so a later unlock does not rescan.
     core.lock();
     let core = WalletCore::unlock(ProfilePaths::in_dir(dir.path()), b"pw", Network::Testnet)
@@ -380,4 +432,19 @@ async fn syncing_resolves_heights_and_registers_every_script() {
         core.watch_from_block(&account.id).expect("known"),
         Some(0x0155_4ef4)
     );
+}
+
+#[tokio::test]
+async fn syncing_without_a_backend_reports_not_ready() {
+    let dir = tempdir().expect("tempdir");
+    let paths = ProfilePaths::in_dir(dir.path());
+    let (mut core, _phrase) =
+        WalletCore::create(paths, b"pw", Network::Testnet, WordCount::Words12).expect("creates");
+    let result = core.sync_watched_scripts().await;
+    assert!(matches!(
+        result,
+        Err(CoreError::Backend(
+            lantern_chain_backend::BackendError::NotReady
+        ))
+    ));
 }

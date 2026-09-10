@@ -12,7 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lantern_account_registry::{
     AccountRegistry, StoredAccount, WalletOrigin, account_id, to_record,
 };
-use lantern_chain_backend::{BackendError, BackendManager, ChainBackend, WatchedScript};
+use lantern_chain_backend::{
+    BackendError, BackendManager, ChainBackend, H256, JsonBytes, Script, ScriptHashType,
+    WatchedScript,
+};
 use lantern_sdk_schema::{AccountRecord, Derivation, LockType, Network};
 use lantern_vault::{ExposeSecret, Vault};
 
@@ -341,20 +344,20 @@ impl WalletCore {
             let module = self.locks.get(account.lock_type)?;
             let template = module.script_template();
             let hash_type = match template.hash_type {
-                0 => ckb_jsonrpc_types::ScriptHashType::Data,
-                1 => ckb_jsonrpc_types::ScriptHashType::Type,
-                2 => ckb_jsonrpc_types::ScriptHashType::Data1,
-                4 => ckb_jsonrpc_types::ScriptHashType::Data2,
+                0 => ScriptHashType::Data,
+                1 => ScriptHashType::Type,
+                2 => ScriptHashType::Data1,
+                4 => ScriptHashType::Data2,
                 _ => {
                     return Err(CoreError::Backend(BackendError::Unsupported(
                         "unknown script hash type",
                     )));
                 }
             };
-            let script = ckb_jsonrpc_types::Script {
-                code_hash: ckb_types::H256(template.code_hash),
+            let script = Script {
+                code_hash: H256(template.code_hash),
                 hash_type,
-                args: ckb_jsonrpc_types::JsonBytes::from_vec(account.lock_args.clone()),
+                args: JsonBytes::from_vec(account.lock_args.clone()),
             };
             watched.push(WatchedScript::lock(
                 script,
