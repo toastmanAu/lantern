@@ -78,6 +78,27 @@ fn free_port() -> Result<u16, BackendError> {
     Ok(port)
 }
 
+/// How long a child gets to exit after `SIGTERM` before it is killed.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+#[cfg(unix)]
+fn request_termination(pid: u32) -> Result<(), BackendError> {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    // `kill` is a safe wrapper, so the workspace's unsafe ban is untouched.
+    let raw = i32::try_from(pid)
+        .map_err(|_| BackendError::Spawn(format!("pid {pid} is out of range")))?;
+    kill(Pid::from_raw(raw), Signal::SIGTERM)
+        .map_err(|e| BackendError::Spawn(format!("could not signal {pid}: {e}")))
+}
+
+#[cfg(not(unix))]
+const fn request_termination(_pid: u32) -> Result<(), BackendError> {
+    // Windows has no SIGTERM; the caller falls through to a hard kill.
+    Ok(())
+}
+
 impl Supervisor {
     /// Generate a config, spawn the child, and wait until it answers.
     pub async fn start(config: SupervisorConfig) -> Result<Self, BackendError> {
@@ -138,22 +159,36 @@ impl Supervisor {
         self.health.clone()
     }
 
-    /// Kill the child, stop forwarding its logs, and mark this supervisor
-    /// stopped.
+    /// Stop the child: `SIGTERM`, a grace period, then `SIGKILL`.
     ///
-    /// This is a temporary placeholder for Task 13: it does not attempt a
-    /// graceful shutdown (SIGTERM before SIGKILL) and knows nothing about
-    /// restart or circuit-breaker policy. Task 14 replaces it with the real
-    /// implementation; it always returns `Ok(())` because there is currently
-    /// nothing here that can meaningfully fail from the caller's point of
-    /// view.
+    /// On Unix the child is asked to exit cleanly first, so its store isn't
+    /// left mid-write; Windows has no `SIGTERM`, so it goes straight to a
+    /// hard kill. Either way the child is always reaped, log forwarding is
+    /// always aborted, and health always ends at `Stopped`.
+    ///
+    /// Idempotent — calling it on an already-stopped supervisor succeeds.
     pub async fn stop(&mut self) -> Result<(), BackendError> {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-        }
         for task in self.log_tasks.drain(..) {
             task.abort();
+        }
+        let Some(mut child) = self.child.take() else {
+            self.health = SupervisorHealth::Stopped;
+            return Ok(());
+        };
+
+        if cfg!(unix)
+            && let Some(pid) = child.id()
+            && let Err(e) = request_termination(pid)
+        {
+            tracing::debug!("SIGTERM failed, falling through to kill: {e}");
+        }
+
+        if let Ok(Ok(status)) = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await {
+            tracing::debug!("light client exited with {status}");
+        } else {
+            tracing::warn!("light client did not exit in time; killing");
+            let _ = child.kill().await;
+            let _ = child.wait().await;
         }
         self.health = SupervisorHealth::Stopped;
         Ok(())

@@ -83,3 +83,25 @@ async fn two_supervisors_get_different_ports() {
     a.stop().await.expect("a stops");
     b.stop().await.expect("b stops");
 }
+
+#[tokio::test]
+async fn stopping_reaps_the_child_and_frees_the_port() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sup = Supervisor::start(config(dir.path())).await.expect("starts");
+    let port = sup.port();
+    sup.stop().await.expect("stops");
+    assert!(matches!(sup.health(), SupervisorHealth::Stopped));
+
+    // The child is gone, so the port binds again.
+    let rebind = std::net::TcpListener::bind(("127.0.0.1", port));
+    assert!(rebind.is_ok(), "port {port} was not released");
+}
+
+#[tokio::test]
+async fn stopping_twice_is_harmless() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sup = Supervisor::start(config(dir.path())).await.expect("starts");
+    sup.stop().await.expect("first stop");
+    sup.stop().await.expect("second stop is a no-op");
+    assert!(matches!(sup.health(), SupervisorHealth::Stopped));
+}
