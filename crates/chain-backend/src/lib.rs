@@ -23,7 +23,7 @@ pub mod supervisor;
 pub mod testing;
 
 pub use backend::ChainBackend;
-pub use backends::{FullNode, RemoteLight};
+pub use backends::{EmbeddedLight, FullNode, RemoteLight};
 pub use config::LightClientConfig;
 pub use cursor::{CellPage, Cursor};
 pub use error::BackendError;
