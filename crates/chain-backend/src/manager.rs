@@ -520,6 +520,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_rejected_activation_leaves_the_working_backend_alone() {
+        let dir = tempdir().expect("tempdir");
+        let mut manager = BackendManager::open(dir.path().join("backends.json")).expect("opens");
+        manager
+            .add_profile(profile("spy", Network::Testnet, BackendKind::RemoteFull))
+            .expect("adds");
+        manager
+            .add_profile(BackendProfile {
+                endpoint: None,
+                ..profile("no-endpoint", Network::Testnet, BackendKind::RemoteFull)
+            })
+            .expect("adds");
+
+        let stopped = Arc::new(AtomicBool::new(false));
+        manager
+            .activate_backend(
+                "spy",
+                Box::new(SpyBackend {
+                    stopped: stopped.clone(),
+                }),
+            )
+            .await
+            .expect("adopts the spy");
+        assert!(
+            manager.current_backend().is_some(),
+            "precondition: a backend is actually running before the rejected activation"
+        );
+
+        // `default-mainnet` is a first-run default, so its kind is
+        // `EmbeddedLight` — rejected without I/O, before any teardown.
+        assert!(matches!(
+            manager.activate("default-mainnet").await,
+            Err(BackendError::Unsupported(_))
+        ));
+        assert!(
+            manager.current_backend().is_some(),
+            "a rejected activation must leave the working backend connected"
+        );
+        assert!(
+            !stopped.load(Ordering::SeqCst),
+            "the manager must never reach teardown for a no-I/O rejection"
+        );
+
+        // A remote profile with no endpoint is rejected the same way.
+        assert!(matches!(
+            manager.activate("no-endpoint").await,
+            Err(BackendError::Unsupported(_))
+        ));
+        assert!(
+            manager.current_backend().is_some(),
+            "a rejected activation must leave the working backend connected"
+        );
+        assert!(
+            !stopped.load(Ordering::SeqCst),
+            "the manager must never reach teardown for a no-I/O rejection"
+        );
+    }
+
+    #[tokio::test]
     async fn removing_the_active_profile_stops_its_backend() {
         let dir = tempdir().expect("tempdir");
         let mut manager = BackendManager::open(dir.path().join("backends.json")).expect("opens");
