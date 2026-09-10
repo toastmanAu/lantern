@@ -10,6 +10,7 @@
 
 pub mod backend;
 pub mod backends;
+pub mod config;
 pub mod cursor;
 pub mod error;
 pub mod full;
@@ -22,6 +23,7 @@ pub mod testing;
 
 pub use backend::ChainBackend;
 pub use backends::{FullNode, RemoteLight};
+pub use config::LightClientConfig;
 pub use cursor::{CellPage, Cursor};
 pub use error::BackendError;
 pub use full::FullRpc;
