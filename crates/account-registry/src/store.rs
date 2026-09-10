@@ -356,6 +356,119 @@ mod tests {
         assert!(text.contains("\"version\": 2"), "{text}");
         assert!(text.contains("\"origin\": \"imported\""), "{text}");
         assert!(text.contains("\"watchFromBlock\": 0"), "{text}");
+
+        // Round trip through a fresh reopen and compare the WHOLE struct in
+        // one assertion, so a regression that drops any field (not just the
+        // two the migration touches) fails this test.
+        let reg2 = AccountRegistry::open(&path).expect("reopens the migrated file");
+        assert_eq!(
+            reg2.list()[0],
+            StoredAccount {
+                id: "secp256k1_blake160-1111111111111111111111111111111111111111".into(),
+                label: "Main".into(),
+                lock_type: LockType::Secp256k1Blake160,
+                extension_id: "core.secp256k1".into(),
+                lock_args: vec![0x11; 20],
+                derivation: Some(Derivation {
+                    change: 0,
+                    index: 0
+                }),
+                created_at: 1_700_000_000,
+                watch_from_block: Some(0),
+            }
+        );
+        assert_eq!(
+            reg2.origin(),
+            WalletOrigin::Imported,
+            "origin must survive the reload, not merely the migration"
+        );
+    }
+
+    #[test]
+    fn a_v1_file_migrates_every_account() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("accounts.json");
+        let v1 = r#"{
+          "version": 1,
+          "accounts": [
+            {
+              "id": "secp256k1_blake160-1111111111111111111111111111111111111111",
+              "label": "First",
+              "lockType": "secp256k1_blake160",
+              "extensionId": "core.secp256k1",
+              "lockArgs": "1111111111111111111111111111111111111111",
+              "derivation": { "change": 0, "index": 0 },
+              "createdAt": 1700000000
+            },
+            {
+              "id": "secp256k1_blake160-2222222222222222222222222222222222222222",
+              "label": "Second",
+              "lockType": "secp256k1_blake160",
+              "extensionId": "core.secp256k1",
+              "lockArgs": "2222222222222222222222222222222222222222",
+              "derivation": { "change": 0, "index": 1 },
+              "createdAt": 1700000001
+            },
+            {
+              "id": "secp256k1_blake160-3333333333333333333333333333333333333333",
+              "label": "Third",
+              "lockType": "secp256k1_blake160",
+              "extensionId": "core.secp256k1",
+              "lockArgs": "3333333333333333333333333333333333333333",
+              "derivation": null,
+              "createdAt": 1700000002
+            }
+          ]
+        }"#;
+        std::fs::write(&path, v1).expect("writes");
+
+        let reg = AccountRegistry::open(&path).expect("opens a v1 file");
+        // Assert the count first so a truncating bug cannot make the
+        // per-account loop below vacuously pass.
+        assert_eq!(reg.list().len(), 3);
+        for account in reg.list() {
+            assert_eq!(
+                account.watch_from_block,
+                Some(0),
+                "account {} did not migrate",
+                account.id
+            );
+        }
+        assert_eq!(
+            reg.list().iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec![
+                "secp256k1_blake160-1111111111111111111111111111111111111111",
+                "secp256k1_blake160-2222222222222222222222222222222222222222",
+                "secp256k1_blake160-3333333333333333333333333333333333333333",
+            ],
+            "account order must be preserved; the registry indexes by position"
+        );
+        assert_eq!(reg.list()[2].derivation, None);
+    }
+
+    #[test]
+    fn a_v1_file_with_no_accounts_migrates_cleanly() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("accounts.json");
+        std::fs::write(&path, r#"{ "version": 1, "accounts": [] }"#).expect("writes");
+
+        let reg = AccountRegistry::open(&path).expect("opens a v1 file");
+        assert!(reg.list().is_empty());
+        assert_eq!(reg.origin(), WalletOrigin::Imported);
+
+        reg.save().expect("saves");
+        let text = std::fs::read_to_string(&path).expect("reads");
+        assert!(text.contains("\"version\": 2"), "{text}");
+    }
+
+    #[test]
+    fn imported_is_the_default_origin_and_the_migration_target() {
+        assert_eq!(
+            WalletOrigin::default(),
+            WalletOrigin::Imported,
+            "the v1 migration's explicit Imported and serde's default must agree; \
+             if you change Default, the migration arm is what keeps v1 files honest"
+        );
     }
 
     #[test]
