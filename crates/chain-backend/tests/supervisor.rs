@@ -219,3 +219,44 @@ async fn a_healthy_child_needs_no_restart() {
     assert_eq!(sup.port(), port, "no needless restart");
     sup.stop().await.expect("stops");
 }
+
+#[tokio::test]
+async fn restarts_that_never_come_up_still_open_the_breaker() {
+    // The likeliest real failure is the binary itself becoming permanently
+    // unspawnable (deleted, corrupted, permissions changed) after the
+    // supervisor is already running. To reach that path directly: start
+    // against a private copy of the stub (so the first `Supervisor::start`
+    // succeeds and no other test sharing the cargo-built binary is
+    // affected), then delete the copy. The already-running child keeps
+    // running on its in-kernel image until `FAKE_LC_EXIT_AFTER_MS` ends it,
+    // but every `Command::new(&binary).spawn()` after that fails at ENOENT —
+    // exactly the `Self::start` failure inside `ensure_running` that must
+    // count toward the breaker rather than retrying forever unthrottled.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let binary = dir.path().join("fake_light_client");
+    std::fs::copy(env!("CARGO_BIN_EXE_fake_light_client"), &binary).expect("copy stub");
+
+    let mut cfg = config(dir.path());
+    cfg.policy = brisk_policy();
+    cfg.binary = binary.clone();
+    cfg.extra_env
+        .push(("FAKE_LC_EXIT_AFTER_MS".into(), "60".into()));
+
+    let mut sup = Supervisor::start(cfg).await.expect("starts");
+    std::fs::remove_file(&binary).expect("remove stub so every restart fails to spawn");
+
+    let mut opened = false;
+    for _ in 0..60 {
+        let _ = sup.ensure_running().await;
+        if matches!(sup.health(), SupervisorHealth::CircuitOpen) {
+            opened = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        opened,
+        "a binary that can no longer be spawned must still trip the breaker, health={:?}",
+        sup.health()
+    );
+}

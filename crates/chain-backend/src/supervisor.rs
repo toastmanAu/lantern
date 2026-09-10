@@ -310,9 +310,20 @@ impl Supervisor {
         }
 
         self.restarts = self.restarts.saturating_add(1);
-        let replacement = Self::start(self.config.clone()).await?;
-        self.adopt(replacement);
-        Ok(())
+        match Self::start(self.config.clone()).await {
+            Ok(replacement) => {
+                self.adopt(replacement);
+                Ok(())
+            }
+            Err(e) => {
+                // A restart that fails to come up is just as much a crash as
+                // one that comes up and dies: it must count toward the
+                // breaker and arm the backoff, or a permanently broken
+                // binary is retried on every single call with no throttle.
+                self.record_exit();
+                Err(e)
+            }
+        }
     }
 
     /// Note a crash and open the breaker if they are coming too fast.
