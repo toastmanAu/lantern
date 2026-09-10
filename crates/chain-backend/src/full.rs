@@ -171,4 +171,38 @@ mod tests {
         assert!(page.is_exhausted());
         assert!(page.next().is_none());
     }
+
+    #[tokio::test]
+    async fn send_transaction_asks_for_the_passthrough_validator() {
+        // Without this parameter a node falls back to `well_known_scripts_only`
+        // and rejects outputs using non-standard locks — which is every
+        // post-quantum and passkey lock this wallet plans to support.
+        let node = FakeNode::builder()
+            .respond(
+                "send_transaction",
+                json!("0x03e1abe59be2f5541d84590222048b4594318fa323e5ab0d377904cb84e624f4"),
+            )
+            .start()
+            .await;
+        let rpc = FullRpc::new(node.url(), Duration::from_secs(5)).expect("client");
+        let tx: ckb_jsonrpc_types::Transaction = serde_json::from_value(json!({
+            "version": "0x0",
+            "cell_deps": [],
+            "header_deps": [],
+            "inputs": [],
+            "outputs": [],
+            "outputs_data": [],
+            "witnesses": []
+        }))
+        .expect("a minimal transaction");
+
+        rpc.send_transaction(&tx).await.expect("sends");
+
+        let (method, params) = node.calls().into_iter().next().expect("one call");
+        assert_eq!(method, "send_transaction");
+        assert_eq!(
+            params[1], "passthrough",
+            "dropping the validator makes the node reject non-standard locks: {params}"
+        );
+    }
 }
