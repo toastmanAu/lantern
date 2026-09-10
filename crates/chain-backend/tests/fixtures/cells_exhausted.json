@@ -1,0 +1,8 @@
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "last_cursor": "0x",
+        "objects": []
+    },
+    "id": 1
+}

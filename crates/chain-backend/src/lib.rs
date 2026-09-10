@@ -13,6 +13,8 @@ pub mod error;
 pub mod indexer;
 pub mod query;
 pub mod rpc;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 pub use cursor::{CellPage, Cursor};
 pub use error::BackendError;
