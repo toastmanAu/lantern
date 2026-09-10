@@ -40,4 +40,7 @@ pub enum CoreError {
 
     #[error("stored account {account_id} does not match the wallet seed")]
     RegistryMismatch { account_id: String },
+
+    #[error(transparent)]
+    Backend(#[from] lantern_chain_backend::BackendError),
 }

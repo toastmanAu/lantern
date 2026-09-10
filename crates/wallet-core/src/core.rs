@@ -9,7 +9,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lantern_account_registry::{AccountRegistry, StoredAccount, account_id, to_record};
+use lantern_account_registry::{
+    AccountRegistry, StoredAccount, WalletOrigin, account_id, to_record,
+};
+use lantern_chain_backend::{BackendError, BackendManager, ChainBackend, WatchedScript};
 use lantern_sdk_schema::{AccountRecord, Derivation, LockType, Network};
 use lantern_vault::{ExposeSecret, Vault};
 
@@ -48,6 +51,7 @@ pub struct WalletCore {
     locks: LockRegistry,
     network: Network,
     paths: ProfilePaths,
+    backend: Option<BackendManager>,
 }
 
 impl std::fmt::Debug for WalletCore {
@@ -73,7 +77,9 @@ impl WalletCore {
         }
         let mut vault = Vault::create(&paths.vault, password)?;
         let phrase = Keyring::create(&mut vault, words)?;
-        let accounts = AccountRegistry::open(&paths.accounts)?;
+        let mut accounts = AccountRegistry::open(&paths.accounts)?;
+        accounts.set_origin(WalletOrigin::Created);
+        accounts.save()?;
         Ok((
             Self {
                 vault,
@@ -81,6 +87,7 @@ impl WalletCore {
                 locks: LockRegistry::with_first_party(),
                 network,
                 paths,
+                backend: None,
             },
             phrase,
         ))
@@ -101,13 +108,16 @@ impl WalletCore {
         crate::mnemonic::parse_phrase(phrase)?;
         let mut vault = Vault::create(&paths.vault, password)?;
         Keyring::import(&mut vault, phrase)?;
-        let accounts = AccountRegistry::open(&paths.accounts)?;
+        let mut accounts = AccountRegistry::open(&paths.accounts)?;
+        accounts.set_origin(WalletOrigin::Imported);
+        accounts.save()?;
         Ok(Self {
             vault,
             accounts,
             locks: LockRegistry::with_first_party(),
             network,
             paths,
+            backend: None,
         })
     }
 
@@ -135,6 +145,7 @@ impl WalletCore {
             locks,
             network,
             paths,
+            backend: None,
         })
     }
 
@@ -204,7 +215,12 @@ impl WalletCore {
             lock_args,
             derivation: Some(derivation),
             created_at: now_unix(),
-            watch_from_block: None,
+            // An import may have arbitrary history, so scan everything. A
+            // freshly created wallet cannot, so defer to the first sync.
+            watch_from_block: match self.accounts.origin() {
+                WalletOrigin::Imported => Some(0),
+                WalletOrigin::Created => None,
+            },
         };
         let record = to_record(
             &stored,
@@ -257,6 +273,97 @@ impl WalletCore {
 
     pub const fn signer(&self) -> SigningCoordinator<'_> {
         SigningCoordinator { core: self }
+    }
+
+    /// Adopt a backend manager. The manager owns the active backend; the
+    /// wallet only asks it questions.
+    pub fn attach_backend(&mut self, manager: BackendManager) {
+        self.backend = Some(manager);
+    }
+
+    pub fn backend(&self) -> Option<&dyn ChainBackend> {
+        self.backend
+            .as_ref()
+            .and_then(BackendManager::current_backend)
+    }
+
+    /// The start height recorded for an account, if it has one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::AccountNotFound`] if no account has this id.
+    pub fn watch_from_block(&self, account_id: &str) -> Result<Option<u64>, CoreError> {
+        self.accounts
+            .get(account_id)
+            .map(|a| a.watch_from_block)
+            .ok_or(CoreError::AccountNotFound)
+    }
+
+    /// Resolve any deferred start heights, then tell the backend which
+    /// scripts to watch.
+    ///
+    /// A no-op on full backends, which index everything; on light backends it
+    /// is the difference between syncing and sitting idle forever.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Backend`] if no backend is attached and active,
+    /// if the backend request fails, or if an account's lock module reports
+    /// a hash type this wallet does not understand.
+    pub async fn sync_watched_scripts(&mut self) -> Result<(), CoreError> {
+        let Some(backend) = self
+            .backend
+            .as_ref()
+            .and_then(BackendManager::current_backend)
+        else {
+            return Err(CoreError::Backend(BackendError::NotReady));
+        };
+
+        // Resolve deferred heights to the current tip before registering, so
+        // a light client never downloads filters predating the account.
+        let unresolved: Vec<String> = self
+            .accounts
+            .list()
+            .iter()
+            .filter(|a| a.watch_from_block.is_none())
+            .map(|a| a.id.clone())
+            .collect();
+        if !unresolved.is_empty() {
+            let tip = u64::from(backend.tip_header().await?.inner.number);
+            for id in unresolved {
+                self.accounts.set_watch_from_block(&id, tip)?;
+            }
+            self.accounts.save()?;
+        }
+
+        let mut watched = Vec::new();
+        for account in self.accounts.list() {
+            let module = self.locks.get(account.lock_type)?;
+            let template = module.script_template();
+            let hash_type = match template.hash_type {
+                0 => ckb_jsonrpc_types::ScriptHashType::Data,
+                1 => ckb_jsonrpc_types::ScriptHashType::Type,
+                2 => ckb_jsonrpc_types::ScriptHashType::Data1,
+                4 => ckb_jsonrpc_types::ScriptHashType::Data2,
+                _ => {
+                    return Err(CoreError::Backend(BackendError::Unsupported(
+                        "unknown script hash type",
+                    )));
+                }
+            };
+            let script = ckb_jsonrpc_types::Script {
+                code_hash: ckb_types::H256(template.code_hash),
+                hash_type,
+                args: ckb_jsonrpc_types::JsonBytes::from_vec(account.lock_args.clone()),
+            };
+            watched.push(WatchedScript::lock(
+                script,
+                account.watch_from_block.unwrap_or(0),
+            ));
+        }
+
+        backend.watch_scripts(&watched).await?;
+        Ok(())
     }
 }
 

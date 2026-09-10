@@ -268,3 +268,116 @@ fn nulling_the_derivation_does_not_smuggle_a_swapped_address_past_verification()
         other => panic!("a nulled derivation must not be trusted, got {other:?}"),
     }
 }
+
+#[test]
+fn an_imported_wallet_scans_from_genesis_and_a_created_one_defers() {
+    let imported_dir = tempdir().expect("tempdir");
+    let mut imported = WalletCore::import(
+        ProfilePaths::in_dir(imported_dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let account = imported.create_account("Imported").expect("account");
+    assert_eq!(
+        imported.watch_from_block(&account.id).expect("known"),
+        Some(0),
+        "an imported wallet may have arbitrary history"
+    );
+
+    let created_dir = tempdir().expect("tempdir");
+    let (mut created, _phrase) = WalletCore::create(
+        ProfilePaths::in_dir(created_dir.path()),
+        b"pw",
+        Network::Testnet,
+        WordCount::Words12,
+    )
+    .expect("creates");
+    let account = created.create_account("Fresh").expect("account");
+    assert_eq!(
+        created.watch_from_block(&account.id).expect("known"),
+        None,
+        "a fresh wallet defers to the first sync"
+    );
+}
+
+#[tokio::test]
+async fn syncing_resolves_heights_and_registers_every_script() {
+    use lantern_chain_backend::testing::FakeNode;
+
+    let node = FakeNode::builder()
+        .respond(
+            "get_indexer_tip",
+            serde_json::json!({
+                "block_hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                "block_number": "0x1554ef4"
+            }),
+        )
+        .respond(
+            "get_tip_header",
+            serde_json::json!({
+                "compact_target": "0x1a08a97e", "dao": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "epoch": "0x1", "extra_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                "nonce": "0x0", "number": "0x1554ef4",
+                "parent_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "proposals_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "timestamp": "0x1", "transactions_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "version": "0x0"
+            }),
+        )
+        // `BackendManager::activate` calls `FullNode::start()`, which probes
+        // `local_node_info` — the brief's mock omitted this route, and the
+        // fake node returns an RPC error for any unmocked method.
+        .respond(
+            "local_node_info",
+            serde_json::json!({
+                "version": "0.5.5",
+                "node_id": "QmTestNode",
+                "active": true,
+                "addresses": [],
+                "protocols": [],
+                "connections": "0x0"
+            }),
+        )
+        .start()
+        .await;
+
+    let dir = tempdir().expect("tempdir");
+    let paths = ProfilePaths::in_dir(dir.path());
+    let (mut core, _phrase) =
+        WalletCore::create(paths, b"pw", Network::Testnet, WordCount::Words12).expect("creates");
+    let account = core.create_account("Fresh").expect("account");
+    assert_eq!(core.watch_from_block(&account.id).expect("known"), None);
+
+    let mut manager = lantern_chain_backend::BackendManager::open(dir.path().join("backends.json"))
+        .expect("manager");
+    manager
+        .add_profile(lantern_sdk_schema::BackendProfile {
+            id: "fake".into(),
+            label: "fake".into(),
+            network: Network::Testnet,
+            kind: lantern_sdk_schema::BackendKind::RemoteFull,
+            endpoint: Some(node.url()),
+        })
+        .expect("adds");
+    manager.activate("fake").await.expect("activates");
+    core.attach_backend(manager);
+
+    core.sync_watched_scripts().await.expect("syncs");
+    assert_eq!(
+        core.watch_from_block(&account.id).expect("known"),
+        Some(0x0155_4ef4),
+        "the deferred height resolved to the tip"
+    );
+
+    // Resolved heights persist, so a later unlock does not rescan.
+    core.lock();
+    let core = WalletCore::unlock(ProfilePaths::in_dir(dir.path()), b"pw", Network::Testnet)
+        .expect("reopens");
+    assert_eq!(
+        core.watch_from_block(&account.id).expect("known"),
+        Some(0x0155_4ef4)
+    );
+}

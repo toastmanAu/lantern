@@ -2408,6 +2408,8 @@ name = "lantern-wallet-core"
 version = "0.0.3"
 dependencies = [
  "bip39",
+ "ckb-jsonrpc-types",
+ "ckb-types",
  "hex",
  "lantern-account-registry",
  "lantern-chain-backend",
@@ -2421,6 +2423,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "zeroize",
 ]

@@ -15,5 +15,6 @@ pub mod mnemonic;
 pub use core::{ProfilePaths, SigningCoordinator, WalletCore};
 pub use error::CoreError;
 pub use keyring::Keyring;
+pub use lantern_chain_backend::{BackendManager, ChainBackend};
 pub use locks::LockRegistry;
 pub use mnemonic::{MnemonicFormat, Phrase, WordCount};
