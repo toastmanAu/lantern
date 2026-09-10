@@ -232,6 +232,14 @@ async fn restarts_that_never_come_up_still_open_the_breaker() {
     // but every `Command::new(&binary).spawn()` after that fails at ENOENT —
     // exactly the `Self::start` failure inside `ensure_running` that must
     // count toward the breaker rather than retrying forever unthrottled.
+    //
+    // Unlike the crash-loop tests above, this one has no reason to race the
+    // *initial* start: it only needs the child to self-exit once, to seed
+    // the crash-and-restart cycle before the binary is deleted. 400ms gives
+    // `await_ready` a comfortable window to complete before the child ever
+    // exits, so the first `Supervisor::start` isn't gambling with the same
+    // tight timing `repeated_fast_crashes_open_the_circuit_and_stop_retrying`
+    // has to guard against with a `let ... else` skip.
     let dir = tempfile::tempdir().expect("tempdir");
     let binary = dir.path().join("fake_light_client");
     std::fs::copy(env!("CARGO_BIN_EXE_fake_light_client"), &binary).expect("copy stub");
@@ -240,13 +248,13 @@ async fn restarts_that_never_come_up_still_open_the_breaker() {
     cfg.policy = brisk_policy();
     cfg.binary = binary.clone();
     cfg.extra_env
-        .push(("FAKE_LC_EXIT_AFTER_MS".into(), "60".into()));
+        .push(("FAKE_LC_EXIT_AFTER_MS".into(), "400".into()));
 
     let mut sup = Supervisor::start(cfg).await.expect("starts");
     std::fs::remove_file(&binary).expect("remove stub so every restart fails to spawn");
 
     let mut opened = false;
-    for _ in 0..60 {
+    for _ in 0..100 {
         let _ = sup.ensure_running().await;
         if matches!(sup.health(), SupervisorHealth::CircuitOpen) {
             opened = true;
