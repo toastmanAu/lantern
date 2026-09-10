@@ -200,8 +200,62 @@ impl WalletCore {
         Keyring::format(&self.vault)
     }
 
+    /// The start height to record for an account created right now.
+    ///
+    /// Decided here, never deferred. An account's address is usable the
+    /// instant `create_account` returns, and the window between that and the
+    /// first successful sync is unbounded — no backend need ever be attached.
+    /// Resolving the height to "the tip whenever sync first runs" would
+    /// therefore skip filters for any block that funded the address in
+    /// between, and the wrong height is persisted, so it never self-heals.
+    ///
+    /// `0` is the honest answer whenever the current tip is not known: it
+    /// costs a full filter scan, which is the very cost `watch_from_block`
+    /// exists to avoid, but over-scanning is slow while under-scanning shows
+    /// a zero balance with no error anywhere. A stale tip from a lagging
+    /// light client is safe for the same reason — earlier only means more
+    /// scanning.
+    async fn start_height_for_new_account(&self) -> u64 {
+        match self.accounts.origin() {
+            // An import may have arbitrary history: scan everything.
+            WalletOrigin::Imported => 0,
+            WalletOrigin::Created => {
+                let Some(backend) = self
+                    .backend
+                    .as_ref()
+                    .and_then(BackendManager::current_backend)
+                else {
+                    return 0;
+                };
+                match backend.tip_header().await {
+                    Ok(header) => u64::from(header.inner.number),
+                    Err(e) => {
+                        tracing::warn!(
+                            "could not read the chain tip for a new account; \
+                             scanning from genesis instead: {e}"
+                        );
+                        0
+                    }
+                }
+            }
+        }
+    }
+
     /// Derive the next receiving account under the secp256k1 module.
-    pub fn create_account(&mut self, label: &str) -> Result<AccountRecord, CoreError> {
+    ///
+    /// Async because the start height is settled here, against the attached
+    /// backend, rather than deferred to the first sync — see
+    /// [`Self::start_height_for_new_account`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::UnsupportedLock`] if the secp256k1 module is not
+    /// registered, and any vault, lock-module or registry error raised while
+    /// deriving or persisting the account.
+    pub async fn create_account(&mut self, label: &str) -> Result<AccountRecord, CoreError> {
+        // Settle the height before touching the vault, so no secret is held
+        // across an await.
+        let watch_from_block = self.start_height_for_new_account().await;
         let module = self.locks.get(LockType::Secp256k1Blake160)?;
         let derivation = Derivation {
             change: 0,
@@ -218,12 +272,7 @@ impl WalletCore {
             lock_args,
             derivation: Some(derivation),
             created_at: now_unix(),
-            // An import may have arbitrary history, so scan everything. A
-            // freshly created wallet cannot, so defer to the first sync.
-            watch_from_block: match self.accounts.origin() {
-                WalletOrigin::Imported => Some(0),
-                WalletOrigin::Created => None,
-            },
+            watch_from_block: Some(watch_from_block),
         };
         let record = to_record(
             &stored,
@@ -280,8 +329,27 @@ impl WalletCore {
 
     /// Adopt a backend manager. The manager owns the active backend; the
     /// wallet only asks it questions.
-    pub fn attach_backend(&mut self, manager: BackendManager) {
+    ///
+    /// Refuses a manager whose active profile is on another network. Nothing
+    /// further down would notice: secp256k1 lock args are chain-independent,
+    /// so a testnet wallet pointed at mainnet renders `ckt1…` addresses over
+    /// mainnet cells and would build real mainnet spends behind a
+    /// testnet-labelled UI. This is the only place the two claims meet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::BackendNetworkMismatch`] if the manager's active
+    /// profile names a different network from this wallet's.
+    pub fn attach_backend(&mut self, manager: BackendManager) -> Result<(), CoreError> {
+        let backend = manager.current_network();
+        if backend != self.network {
+            return Err(CoreError::BackendNetworkMismatch {
+                wallet: self.network,
+                backend,
+            });
+        }
         self.backend = Some(manager);
+        Ok(())
     }
 
     pub fn backend(&self) -> Option<&dyn ChainBackend> {
@@ -302,18 +370,23 @@ impl WalletCore {
             .ok_or(CoreError::AccountNotFound)
     }
 
-    /// Resolve any deferred start heights, then tell the backend which
-    /// scripts to watch.
+    /// Tell the backend which scripts to watch, from each account's own
+    /// recorded start height.
     ///
     /// A no-op on full backends, which index everything; on light backends it
     /// is the difference between syncing and sitting idle forever.
+    ///
+    /// Heights are never resolved here: `create_account` settles them (see
+    /// [`Self::start_height_for_new_account`]), so this call is idempotent
+    /// and reads only. A `None` height can still reach here from a
+    /// hand-edited `accounts.json`; it is treated as `0`, never as the tip.
     ///
     /// # Errors
     ///
     /// Returns [`CoreError::Backend`] if no backend is attached and active,
     /// if the backend request fails, or if an account's lock module reports
     /// a hash type this wallet does not understand.
-    pub async fn sync_watched_scripts(&mut self) -> Result<(), CoreError> {
+    pub async fn sync_watched_scripts(&self) -> Result<(), CoreError> {
         let Some(backend) = self
             .backend
             .as_ref()
@@ -321,23 +394,6 @@ impl WalletCore {
         else {
             return Err(CoreError::Backend(BackendError::NotReady));
         };
-
-        // Resolve deferred heights to the current tip before registering, so
-        // a light client never downloads filters predating the account.
-        let unresolved: Vec<String> = self
-            .accounts
-            .list()
-            .iter()
-            .filter(|a| a.watch_from_block.is_none())
-            .map(|a| a.id.clone())
-            .collect();
-        if !unresolved.is_empty() {
-            let tip = u64::from(backend.tip_header().await?.inner.number);
-            for id in unresolved {
-                self.accounts.set_watch_from_block(&id, tip)?;
-            }
-            self.accounts.save()?;
-        }
 
         let mut watched = Vec::new();
         for account in self.accounts.list() {
@@ -463,8 +519,8 @@ mod tests {
         (registry, seen)
     }
 
-    #[test]
-    fn coordinator_hands_raw_entropy_to_a_pq_shaped_module() {
+    #[tokio::test]
+    async fn coordinator_hands_raw_entropy_to_a_pq_shaped_module() {
         let dir = tempdir().expect("tempdir");
         let (locks, seen) = fake_registry(SeedKind::RawEntropy);
         let (core, _phrase) = WalletCore::create(
@@ -475,7 +531,7 @@ mod tests {
         )
         .expect("creates");
         let mut core = core.with_locks(locks);
-        let record = core.create_account("pq").expect("creates account");
+        let record = core.create_account("pq").await.expect("creates account");
         assert_eq!(record.extension_id, "test.fake");
         core.signer()
             .sign_digest(&record.id, &[0u8; 32])
@@ -483,8 +539,8 @@ mod tests {
         assert_eq!(*seen.lock().expect("mutex"), vec![32, 32]);
     }
 
-    #[test]
-    fn coordinator_hands_the_bip39_seed_to_a_bip32_module() {
+    #[tokio::test]
+    async fn coordinator_hands_the_bip39_seed_to_a_bip32_module() {
         let dir = tempdir().expect("tempdir");
         let (locks, seen) = fake_registry(SeedKind::Bip39Seed);
         let (core, _phrase) = WalletCore::create(
@@ -495,12 +551,12 @@ mod tests {
         )
         .expect("creates");
         let mut core = core.with_locks(locks);
-        core.create_account("hd").expect("creates account");
+        core.create_account("hd").await.expect("creates account");
         assert_eq!(*seen.lock().expect("mutex"), vec![64]);
     }
 
-    #[test]
-    fn empty_lock_registry_is_unsupported_lock() {
+    #[tokio::test]
+    async fn empty_lock_registry_is_unsupported_lock() {
         let dir = tempdir().expect("tempdir");
         let (core, _phrase) = WalletCore::create(
             ProfilePaths::in_dir(dir.path()),
@@ -511,7 +567,7 @@ mod tests {
         .expect("creates");
         let mut core = core.with_locks(LockRegistry::new());
         assert!(matches!(
-            core.create_account("x"),
+            core.create_account("x").await,
             Err(CoreError::UnsupportedLock(LockType::Secp256k1Blake160))
         ));
     }

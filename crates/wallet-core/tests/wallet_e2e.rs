@@ -22,8 +22,8 @@ fn lock_args_of(record: &AccountRecord) -> Vec<u8> {
     hex::decode(hex_args.trim_start_matches("0x")).expect("hex")
 }
 
-#[test]
-fn create_three_accounts_lock_unlock_sign_and_recover() {
+#[tokio::test]
+async fn create_three_accounts_lock_unlock_sign_and_recover() {
     let dir = tempdir().expect("tempdir");
     let paths = ProfilePaths::in_dir(dir.path());
     let (mut core, phrase) =
@@ -31,9 +31,9 @@ fn create_three_accounts_lock_unlock_sign_and_recover() {
             .expect("creates");
     assert_eq!(phrase.word_count(), 24);
 
-    let a0 = core.create_account("One").expect("account 0");
-    let a1 = core.create_account("Two").expect("account 1");
-    let a2 = core.create_account("Three").expect("account 2");
+    let a0 = core.create_account("One").await.expect("account 0");
+    let a1 = core.create_account("Two").await.expect("account 1");
+    let a2 = core.create_account("Three").await.expect("account 2");
     assert_eq!(a0.public_metadata["derivation"]["index"], 0);
     assert_eq!(a1.public_metadata["derivation"]["index"], 1);
     assert_eq!(a2.public_metadata["derivation"]["index"], 2);
@@ -47,7 +47,7 @@ fn create_three_accounts_lock_unlock_sign_and_recover() {
     assert_eq!(accounts.len(), 3);
     assert_eq!(accounts[1], a1);
 
-    let a3 = core.create_account("Four").expect("account 3");
+    let a3 = core.create_account("Four").await.expect("account 3");
     assert_eq!(a3.public_metadata["derivation"]["index"], 3);
 
     let digest = [0x5au8; 32];
@@ -64,8 +64,8 @@ fn create_three_accounts_lock_unlock_sign_and_recover() {
     ));
 }
 
-#[test]
-fn imported_phrase_yields_the_lumos_key_and_reveals_with_the_password() {
+#[tokio::test]
+async fn imported_phrase_yields_the_lumos_key_and_reveals_with_the_password() {
     let dir = tempdir().expect("tempdir");
     let paths = ProfilePaths::in_dir(dir.path());
     let mut core = WalletCore::import(paths, b"pw", Network::Testnet, TANK).expect("imports");
@@ -74,7 +74,7 @@ fn imported_phrase_yields_the_lumos_key_and_reveals_with_the_password() {
         MnemonicFormat::Single
     );
 
-    let account = core.create_account("Imported").expect("account");
+    let account = core.create_account("Imported").await.expect("account");
     let key_bytes = hex::decode("848422863825f69e66dc7f48a3302459ec845395370c23578817456ad6b04b14")
         .expect("hex");
     let mut arr = [0u8; 32];
@@ -96,8 +96,8 @@ fn imported_phrase_yields_the_lumos_key_and_reveals_with_the_password() {
     ));
 }
 
-#[test]
-fn quantum_purse_combined_phrase_imports_and_signs() {
+#[tokio::test]
+async fn quantum_purse_combined_phrase_imports_and_signs() {
     let dir = tempdir().expect("tempdir");
     let paths = ProfilePaths::in_dir(dir.path());
     let combined = format!("{P1} {P2} {P3}");
@@ -107,7 +107,7 @@ fn quantum_purse_combined_phrase_imports_and_signs() {
         MnemonicFormat::Combined3
     );
 
-    let account = core.create_account("PQ import").expect("account");
+    let account = core.create_account("PQ import").await.expect("account");
     assert!(account.address.starts_with("ckb1"), "{}", account.address);
     assert_eq!(lock_args_of(&account).len(), 20);
 
@@ -190,14 +190,14 @@ fn bad_phrase_on_import_leaves_no_vault_file() {
     WalletCore::import(paths, b"pw", Network::Testnet, TANK).expect("retry succeeds");
 }
 
-#[test]
-fn unlock_rejects_a_tampered_accounts_file() {
+#[tokio::test]
+async fn unlock_rejects_a_tampered_accounts_file() {
     let dir = tempdir().expect("tempdir");
     let paths = ProfilePaths::in_dir(dir.path());
     let real_args = {
         let mut core =
             WalletCore::import(paths.clone(), b"pw", Network::Testnet, TANK).expect("imports");
-        let account = core.create_account("Main").expect("account");
+        let account = core.create_account("Main").await.expect("account");
         core.lock();
         lock_args_of(&account)
     };
@@ -220,8 +220,8 @@ fn unlock_rejects_a_tampered_accounts_file() {
     WalletCore::unlock(paths, b"pw", Network::Testnet).expect("opens again");
 }
 
-#[test]
-fn unlock_accepts_an_untouched_registry_with_several_accounts() {
+#[tokio::test]
+async fn unlock_accepts_an_untouched_registry_with_several_accounts() {
     let dir = tempdir().expect("tempdir");
     let paths = ProfilePaths::in_dir(dir.path());
     {
@@ -229,7 +229,7 @@ fn unlock_accepts_an_untouched_registry_with_several_accounts() {
             WalletCore::create(paths.clone(), b"pw", Network::Testnet, WordCount::Words12)
                 .expect("creates");
         for label in ["One", "Two", "Three"] {
-            core.create_account(label).expect("account");
+            core.create_account(label).await.expect("account");
         }
         core.lock();
     }
@@ -237,14 +237,14 @@ fn unlock_accepts_an_untouched_registry_with_several_accounts() {
     assert_eq!(core.accounts().expect("lists").len(), 3);
 }
 
-#[test]
-fn nulling_the_derivation_does_not_smuggle_a_swapped_address_past_verification() {
+#[tokio::test]
+async fn nulling_the_derivation_does_not_smuggle_a_swapped_address_past_verification() {
     let dir = tempdir().expect("tempdir");
     let paths = ProfilePaths::in_dir(dir.path());
     {
         let mut core =
             WalletCore::import(paths.clone(), b"pw", Network::Testnet, TANK).expect("imports");
-        core.create_account("Main").expect("account");
+        core.create_account("Main").await.expect("account");
         core.lock();
     }
     // The full attack: swap the address AND null the derivation, so a
@@ -269,8 +269,62 @@ fn nulling_the_derivation_does_not_smuggle_a_swapped_address_past_verification()
     }
 }
 
-#[test]
-fn an_imported_wallet_scans_from_genesis_and_a_created_one_defers() {
+/// A `local_node_info` reply shaped like a real light client's, so
+/// `RemoteLight::start()`'s reachability probe succeeds.
+fn local_node_info_json() -> serde_json::Value {
+    serde_json::json!({
+        "version": "0.5.5",
+        "node_id": "QmTestNode",
+        "active": true,
+        "addresses": [],
+        "protocols": [],
+        "connections": "0x0"
+    })
+}
+
+fn header_json(number: &str) -> serde_json::Value {
+    serde_json::json!({
+        "compact_target": "0x1a08a97e", "dao": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "epoch": "0x1", "extra_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "nonce": "0x0", "number": number,
+        "parent_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "proposals_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "timestamp": "0x1", "transactions_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "version": "0x0"
+    })
+}
+
+/// A `BackendManager` with one active `RemoteLight` profile on `network`,
+/// pointed at `url`.
+///
+/// `RemoteLight`, not `RemoteFull`: `FullNode::watch_scripts` is an
+/// unconditional no-op (a full node indexes everything), so a test built on
+/// it could not tell a real registration from a deleted one. A light
+/// client's `watch_scripts` really issues `set_scripts` over the wire.
+async fn light_manager(
+    dir: &std::path::Path,
+    network: Network,
+    url: String,
+) -> lantern_chain_backend::BackendManager {
+    let mut manager =
+        lantern_chain_backend::BackendManager::open(dir.join("backends.json")).expect("manager");
+    manager
+        .add_profile(lantern_sdk_schema::BackendProfile {
+            id: "fake".into(),
+            label: "fake".into(),
+            network,
+            kind: lantern_sdk_schema::BackendKind::RemoteLight,
+            endpoint: Some(url),
+        })
+        .expect("adds");
+    manager.activate("fake").await.expect("activates");
+    manager
+}
+
+#[tokio::test]
+async fn a_new_account_records_a_start_height_now_rather_than_deferring_it() {
+    // An imported wallet may have arbitrary history: genesis, always.
     let imported_dir = tempdir().expect("tempdir");
     let mut imported = WalletCore::import(
         ProfilePaths::in_dir(imported_dir.path()),
@@ -279,13 +333,16 @@ fn an_imported_wallet_scans_from_genesis_and_a_created_one_defers() {
         TANK,
     )
     .expect("imports");
-    let account = imported.create_account("Imported").expect("account");
+    let account = imported.create_account("Imported").await.expect("account");
     assert_eq!(
         imported.watch_from_block(&account.id).expect("known"),
         Some(0),
         "an imported wallet may have arbitrary history"
     );
 
+    // A created wallet with no backend cannot know the tip. Genesis is the
+    // only safe answer: the address is usable the moment this returns, and
+    // the wait for a backend is unbounded.
     let created_dir = tempdir().expect("tempdir");
     let (mut created, _phrase) = WalletCore::create(
         ProfilePaths::in_dir(created_dir.path()),
@@ -294,19 +351,62 @@ fn an_imported_wallet_scans_from_genesis_and_a_created_one_defers() {
         WordCount::Words12,
     )
     .expect("creates");
-    let account = created.create_account("Fresh").expect("account");
+    let account = created.create_account("Fresh").await.expect("account");
     assert_eq!(
         created.watch_from_block(&account.id).expect("known"),
-        None,
-        "a fresh wallet defers to the first sync"
+        Some(0),
+        "with no backend the tip is unknown, so scan everything rather than \
+         resolve to a tip read at some later, unbounded moment"
+    );
+}
+
+#[tokio::test]
+async fn a_created_account_records_the_tip_read_at_creation_time() {
+    use lantern_chain_backend::testing::FakeNode;
+
+    let node = FakeNode::builder()
+        .respond("local_node_info", local_node_info_json())
+        .respond("get_tip_header", header_json("0x1554ef4"))
+        .start()
+        .await;
+
+    let dir = tempdir().expect("tempdir");
+    let (mut core, _phrase) = WalletCore::create(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        WordCount::Words12,
+    )
+    .expect("creates");
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+
+    let account = core.create_account("Fresh").await.expect("account");
+    assert_eq!(
+        core.watch_from_block(&account.id).expect("known"),
+        Some(0x0155_4ef4),
+        "with a reachable backend the height is the tip at creation, not later"
+    );
+    assert!(
+        node.call_count("get_tip_header") >= 1,
+        "the tip must actually be read at creation time"
+    );
+
+    // And it persists, so a later unlock does not rescan.
+    core.lock();
+    let core = WalletCore::unlock(ProfilePaths::in_dir(dir.path()), b"pw", Network::Testnet)
+        .expect("reopens");
+    assert_eq!(
+        core.watch_from_block(&account.id).expect("known"),
+        Some(0x0155_4ef4)
     );
 }
 
 /// Asserts a `set_scripts` call registered exactly two distinct scripts,
-/// each at `expected_tip_hex`, via `partial` (never `all`), each a `lock`
+/// each at `expected_height_hex`, via `partial` (never `all`), each a `lock`
 /// with `ScriptHashType::Type`. Split out of the test body so the test
 /// itself stays under clippy's line-count lint.
-fn assert_registered_two_distinct_scripts(params: &[serde_json::Value], expected_tip_hex: &str) {
+fn assert_registered_two_distinct_scripts(params: &[serde_json::Value], expected_height_hex: &str) {
     assert_eq!(
         params[1], "partial",
         "`all` would wipe every script on a shared light client"
@@ -320,9 +420,8 @@ fn assert_registered_two_distinct_scripts(params: &[serde_json::Value], expected
     let mut all_args = Vec::new();
     for entry in scripts {
         assert_eq!(
-            entry["block_number"], expected_tip_hex,
-            "registration must run after height resolution — if it ran first, \
-             watch_from_block would still be None and this would be \"0x0\""
+            entry["block_number"], expected_height_hex,
+            "each script must be registered at the height its account recorded"
         );
         assert_eq!(entry["script_type"], "lock");
         assert_eq!(
@@ -343,40 +442,14 @@ fn assert_registered_two_distinct_scripts(params: &[serde_json::Value], expected
 }
 
 #[tokio::test]
-async fn syncing_resolves_heights_and_registers_every_script() {
+async fn syncing_registers_every_script_at_its_recorded_height() {
     use lantern_chain_backend::testing::FakeNode;
 
-    // `RemoteLight`, not `RemoteFull`: `FullNode::watch_scripts` is an
-    // unconditional no-op (a full node indexes everything), so a test built
-    // on it could not tell a real registration from a deleted one. A light
-    // client's `watch_scripts` really issues `set_scripts` over the wire —
-    // that is the call this test pins.
     let node = FakeNode::builder()
-        // `RemoteLight::start()` probes this to confirm the endpoint answers.
-        .respond(
-            "local_node_info",
-            serde_json::json!({
-                "version": "0.5.5",
-                "node_id": "QmTestNode",
-                "active": true,
-                "addresses": [],
-                "protocols": [],
-                "connections": "0x0"
-            }),
-        )
-        .respond(
-            "get_tip_header",
-            serde_json::json!({
-                "compact_target": "0x1a08a97e", "dao": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "epoch": "0x1", "extra_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "hash": "0x0000000000000000000000000000000000000000000000000000000000000001",
-                "nonce": "0x0", "number": "0x1554ef4",
-                "parent_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "proposals_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "timestamp": "0x1", "transactions_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "version": "0x0"
-            }),
-        )
+        .respond("local_node_info", local_node_info_json())
+        .respond("get_tip_header", header_json("0x1554ef4"))
+        // The server knows nothing yet, so the recorded heights stand.
+        .respond("get_scripts", serde_json::json!([]))
         .respond("set_scripts", serde_json::json!(null))
         .start()
         .await;
@@ -385,34 +458,16 @@ async fn syncing_resolves_heights_and_registers_every_script() {
     let paths = ProfilePaths::in_dir(dir.path());
     let (mut core, _phrase) =
         WalletCore::create(paths, b"pw", Network::Testnet, WordCount::Words12).expect("creates");
-    let account = core.create_account("Fresh").expect("account");
-    let second = core.create_account("Second").expect("second account");
-    assert_eq!(core.watch_from_block(&account.id).expect("known"), None);
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+    let account = core.create_account("Fresh").await.expect("account");
+    let second = core.create_account("Second").await.expect("second account");
     assert_ne!(
         account.id, second.id,
         "the loop must be proven over more than one account"
     );
 
-    let mut manager = lantern_chain_backend::BackendManager::open(dir.path().join("backends.json"))
-        .expect("manager");
-    manager
-        .add_profile(lantern_sdk_schema::BackendProfile {
-            id: "fake".into(),
-            label: "fake".into(),
-            network: Network::Testnet,
-            kind: lantern_sdk_schema::BackendKind::RemoteLight,
-            endpoint: Some(node.url()),
-        })
-        .expect("adds");
-    manager.activate("fake").await.expect("activates");
-    core.attach_backend(manager);
-
     core.sync_watched_scripts().await.expect("syncs");
-    assert_eq!(
-        core.watch_from_block(&account.id).expect("known"),
-        Some(0x0155_4ef4),
-        "the deferred height resolved to the tip"
-    );
 
     let (_, params) = node
         .calls()
@@ -423,14 +478,106 @@ async fn syncing_resolves_heights_and_registers_every_script() {
         params.as_array().expect("params is an array"),
         "0x1554ef4",
     );
+}
 
-    // Resolved heights persist, so a later unlock does not rescan.
-    core.lock();
-    let core = WalletCore::unlock(ProfilePaths::in_dir(dir.path()), b"pw", Network::Testnet)
-        .expect("reopens");
+#[tokio::test]
+async fn syncing_twice_never_rewinds_the_servers_filter_progress() {
+    use lantern_chain_backend::testing::FakeNode;
+
+    // An imported wallet: every account starts at genesis, so a second sync
+    // that resent the stored height would rewind the light client to block 0
+    // and re-download every filter — on every launch, forever.
+    let dir = tempdir().expect("tempdir");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let account = core.create_account("Imported").await.expect("account");
+    assert_eq!(core.watch_from_block(&account.id).expect("known"), Some(0));
+
+    let args = format!("0x{}", hex::encode(lock_args_of(&account)));
+    let progressed = serde_json::json!([{
+        "script": {
+            "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hash_type": "type",
+            "args": args
+        },
+        "script_type": "lock",
+        "block_number": "0x1554ef4"
+    }]);
+    let node = FakeNode::builder()
+        .respond("local_node_info", local_node_info_json())
+        // First sync: the server knows nothing. Second: it is at 0x1554ef4.
+        .respond_sequence("get_scripts", vec![serde_json::json!([]), progressed])
+        .respond("set_scripts", serde_json::json!(null))
+        .start()
+        .await;
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+
+    core.sync_watched_scripts().await.expect("first sync");
+    core.sync_watched_scripts().await.expect("second sync");
+
+    let sent: Vec<serde_json::Value> = node
+        .calls()
+        .into_iter()
+        .filter(|(method, _)| method == "set_scripts")
+        .map(|(_, params)| params[0][0]["block_number"].clone())
+        .collect();
+    assert_eq!(sent.len(), 2, "both syncs must have registered");
     assert_eq!(
-        core.watch_from_block(&account.id).expect("known"),
-        Some(0x0155_4ef4)
+        sent[0], "0x0",
+        "nothing known yet, so the stored height stands"
+    );
+    assert_eq!(
+        sent[1], "0x1554ef4",
+        "the second sync must send the server's own progress, not the stored \
+         height — `partial` overwrites the stored height unconditionally, so \
+         resending 0x0 rewinds filter sync to genesis and clears the matched \
+         blocks"
+    );
+}
+
+#[tokio::test]
+async fn attaching_a_backend_on_another_network_is_refused() {
+    use lantern_chain_backend::testing::FakeNode;
+
+    let node = FakeNode::builder()
+        .respond("local_node_info", local_node_info_json())
+        .start()
+        .await;
+
+    let dir = tempdir().expect("tempdir");
+    let (mut core, _phrase) = WalletCore::create(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        WordCount::Words12,
+    )
+    .expect("creates");
+
+    // secp256k1 lock args are chain-independent, so nothing downstream would
+    // error: the wallet would render ckt1… addresses over mainnet cells.
+    let manager = light_manager(dir.path(), Network::Mainnet, node.url()).await;
+    let err = core
+        .attach_backend(manager)
+        .expect_err("a mainnet backend must not serve a testnet wallet");
+    assert!(
+        matches!(
+            err,
+            CoreError::BackendNetworkMismatch {
+                wallet: Network::Testnet,
+                backend: Network::Mainnet
+            }
+        ),
+        "{err:?}"
+    );
+    assert!(
+        core.backend().is_none(),
+        "a rejected manager must not be adopted"
     );
 }
 

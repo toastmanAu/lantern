@@ -72,7 +72,7 @@ pub struct BackendCapabilities {
 }
 
 pub enum BackendStatus {
-    Connecting,
+    Connecting,                                  // also: a light backend watching none of our scripts
     Syncing { current: u64, target: u64 },
     Synced { tip: u64 },
     Error { message: String },
@@ -89,6 +89,8 @@ pub struct BackendProfile {          // §18's (network × backend × name)
 ```
 
 All derive `specta::Type` + serde camelCase and join `typescript_bindings()`. `BackendStatus` is an externally tagged enum so the generated TS is a discriminated union.
+
+`is_usable()` is documented as "whether queries can be trusted to return complete results", and is true for `Synced` and `Syncing`. A light backend with none of our scripts registered therefore reports **`Connecting`**, not `Synced`: `get_cells` is guaranteed to return nothing in that state whatever the chain holds, so `Synced` would assert full confidence in exactly the state where there is none. `Connecting` is also not a stalled progress bar, which was the original reason for not reporting `Syncing { current: 0 }` there.
 
 ### 4.2 `lantern-chain-backend`
 
@@ -138,7 +140,11 @@ Verified against CKB testnet on 2026-09-10: exhausting a scan yields `objects: [
 
 **Modules.** `error.rs` (`BackendError`), `rpc.rs` (JSON-RPC envelope + transport), `indexer.rs` (client-side indexer types), `cursor.rs` (`Cursor`, `CellPage`), `query.rs` (`CellQuery`, `WatchedScript`, conversions to `SearchKey`), `light.rs` (light-client RPC client), `full.rs` (full-node RPC client), `backends/remote_light.rs`, `backends/full_node.rs`, `backends/embedded_light.rs`, `supervisor.rs` (process lifecycle), `config.rs` (light-client config generation), `manager.rs` (`BackendManager`), `probe.rs` (capability probing), `testing.rs` (fake RPC server, behind a `testing` feature).
 
-**Light-client RPC surface** (verified against `light-client-bin/src/rpc.rs`): `set_scripts`, `get_scripts`, `get_cells`, `get_transactions`, `get_cells_capacity`, `send_transaction`, `get_transaction`, `fetch_transaction`, `get_tip_header`, `get_genesis_block`, `get_header`, `fetch_header`, `estimate_cycles`, `local_node_info`, `get_peers`. The client wraps all of them; the trait exposes the subset the wallet needs.
+**Light-client RPC surface** (verified against `light-client-bin/src/rpc.rs`): `set_scripts`, `get_scripts`, `get_cells`, `get_transactions`, `get_cells_capacity`, `send_transaction`, `get_transaction`, `fetch_transaction`, `get_tip_header`, `get_genesis_block`, `get_header`, `fetch_header`, `estimate_cycles`, `local_node_info`, `get_peers`. The client wraps all of them; the trait exposes the subset the wallet needs. **There is no `get_blockchain_info`** — see the chain-identity note in §4.4.
+
+**Registration never rewinds.** `LightRpc::set_scripts_partial` reads `get_scripts` first and sends each script at `max(requested, reported)`. Verified in the client's own `storage_trait.rs`: the `Partial` arm writes each sent height unconditionally (`batch.put(&key, &ss.block_number.to_be_bytes())`), then calls `update_min_filtered_block_number_by_scripts()` and `clear_matched_blocks()` — sending a *lower* number is how a rescan is forced. Since registration runs at least once per launch from an account's original start height, sending it unguarded would restart filter sync from that height on every launch, i.e. from genesis forever for an imported wallet. The guard lives on the RPC client, not in a backend or in wallet-core, so every caller inherits it; a deliberate rescan would need an explicit new method.
+
+**Filter progress is our own.** `LightRpc::filter_progress` takes the minimum over the scripts *this client registered*, not over everything `get_scripts` returns: a shared light client also indexes other wallets' scripts, and a stranger's fresh registration at height 0 would otherwise pin this wallet at `Syncing { current: 0 }` forever.
 
 **Full-node RPC surface used:** `get_tip_header`, `get_transaction`, `send_transaction`, `get_cells`, `get_indexer_tip`, `local_node_info`, `estimate_cycles`. `get_cells` takes the same `SearchKey` shape as the light client, which is why one trait method serves both.
 
@@ -210,7 +216,7 @@ Probing a local full node on first run (§6 step 2) is a `probe_local_full()` he
 - `save` always writes v2. A v1 file is migrated in place on first save.
 - A version above 2 is still `Corrupt`.
 
-**`None` has exactly one meaning:** "created before any backend was attached, so the height is not yet known." It arises only from `WalletCore::create_account` on a freshly created wallet with no backend, and `sync_watched_scripts` resolves it to the current tip and persists that. This is safe by construction: a wallet created moments ago has no on-chain history to miss. Imported wallets never produce `None` — they record `Some(0)` explicitly — and neither does the v1 migration.
+**`None` is never written by this wallet.** `create_account` always records a `Some`, settled at creation time (§4.6). The field stays `Option<u64>` because it is part of the persisted v2 format and because a hand-edited `accounts.json` can still present a `None`; registration treats that as `0`, never as the tip. The v1 migration writes `Some(0)`.
 
 `AccountRegistry::watched_scripts(&self, network)` returns `Vec<WatchedScript>` for handing to a backend. Wallet-core owns the call; the registry stays lock-agnostic by taking the `ScriptTemplate` from each account's module as it already does for `to_record`.
 
@@ -218,14 +224,20 @@ Probing a local full node on first run (§6 step 2) is a `probe_local_full()` he
 
 ```rust
 impl WalletCore {
-    pub async fn attach_backend(&mut self, manager: BackendManager) -> Result<(), CoreError>;
+    pub fn attach_backend(&mut self, manager: BackendManager) -> Result<(), CoreError>;
+    pub async fn create_account(&mut self, label: &str) -> Result<AccountRecord, CoreError>;
     pub async fn sync_watched_scripts(&self) -> Result<(), CoreError>;
     pub fn backend(&self) -> Option<&dyn ChainBackend>;
 }
 ```
 
-- `create_account` records `watch_from_block` by origin alone, and stays synchronous: `Some(0)` on a wallet opened through `import` (it may have arbitrary history); `None` on a wallet opened through `create`, for `sync_watched_scripts` to resolve to the tip later, whether or not a backend happens to be attached at creation time. (An earlier draft of this design had `create_account` record `Some(tip)` directly when a backend was already attached, which would have made it `async`. Dropped: the outcome is identical either way, because nothing can reach a brand-new address before the first sync runs, so resolving the start height eagerly at `create_account` time buys nothing.) Origin is read from `accounts.json`'s top-level `origin` field, so it survives a lock/unlock cycle.
-- `sync_watched_scripts` collects every account's script for the active network and calls `watch_scripts`. Invoked on attach, on account creation, and after `activate`.
+- `create_account` is `async` and settles `watch_from_block` **at creation time**, never deferring it: `Some(0)` on a wallet opened through `import` (it may have arbitrary history); on a wallet opened through `create`, `Some(tip)` read from the attached backend, or `Some(0)` when no backend is attached or the tip read fails. Origin is read from `accounts.json`'s top-level `origin` field, so it survives a lock/unlock cycle.
+
+  An earlier draft deferred the `create`-origin height to the first sync, arguing that "nothing can reach a brand-new address before the first sync runs". **That argument was wrong**, and the whole-branch review caught it. `create_account` hands back a usable `ckt1…`/`ckb1…` address immediately and needs no backend; the window is not "wallet created → account created" but "account created → first *successful* sync", and it is unbounded, because `sync_watched_scripts` returns `NotReady` with no backend attached. On this branch that is the normal state, since `BackendManager::activate` refuses `EmbeddedLight` until plan 1f supplies a binary path. Funding the address in block H and attaching a backend days later would have resolved and *persisted* a start height above H, so the light client would never fetch the filters that contain the funding transaction: balance 0, status `Synced`, no error, no self-healing.
+
+  `Some(0)` costs a full filter scan — the very cost this feature exists to avoid — but over-scanning is slow while under-scanning silently loses money, so it is the correct answer whenever the tip is genuinely unknown. A lagging light-client tip is safe for the same reason.
+- `sync_watched_scripts` collects every account's script for the active network and calls `watch_scripts`, at each account's *recorded* height. It resolves nothing and writes nothing, so it is idempotent. Invoked on attach, on account creation, and after `activate`.
+- `attach_backend` refuses a manager whose `current_network()` differs from the wallet's, with `CoreError::BackendNetworkMismatch`. secp256k1 lock args are chain-independent, so a mismatch produces no error anywhere downstream — a testnet wallet would render `ckt1…` addresses over mainnet cells, and plan 1e's builder would spend them for real. It is fallible but not `async`: nothing about the check touches the network.
 - **`unlock` verifies the registry** (the plan 1c final-review carry-over): for every account carrying a `Derivation`, re-derive `lock_args` through its `LockModule` and compare. An account whose `derivation` is `None` is treated as a mismatch, not skipped — nothing in the wallet creates one today, and skipping it would let an attacker null the field to smuggle a swapped `lock_args` past verification. Any mismatch (including a nulled derivation) is `CoreError::RegistryMismatch { account_id }`. Cost is one PBKDF2 plus n derivations, single-digit milliseconds. `accounts.json` is plaintext by design, so this is the cheapest integrity guarantee that does not require authenticating the file. When watch-only or hardware accounts arrive (plan 1e+), they will carry no derivable material by design and this rejection rule cannot apply to them as-is — that plan must authenticate `accounts.json` itself (a MAC keyed by a vault subkey, which plan 1b's `Vault::extension_subkey` already makes available) rather than reinstating a skip.
 
 ## 5. Persistence layout

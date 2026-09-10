@@ -5,7 +5,7 @@
 //! deliberately drops the `bip39` detail, which can echo the offending word.
 
 use lantern_account_registry::RegistryError;
-use lantern_sdk_schema::{LockError, LockType};
+use lantern_sdk_schema::{LockError, LockType, Network};
 use lantern_vault::VaultError;
 use thiserror::Error;
 
@@ -40,6 +40,13 @@ pub enum CoreError {
 
     #[error("stored account {account_id} does not match the wallet seed")]
     RegistryMismatch { account_id: String },
+
+    /// The attached backend claims a different chain from the one this
+    /// wallet renders addresses for. Nothing downstream would error —
+    /// secp256k1 lock args are chain-independent — so this is caught here or
+    /// not at all.
+    #[error("wallet is on {wallet:?} but the backend is on {backend:?}")]
+    BackendNetworkMismatch { wallet: Network, backend: Network },
 
     #[error(transparent)]
     Backend(#[from] lantern_chain_backend::BackendError),
