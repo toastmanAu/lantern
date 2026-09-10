@@ -40,14 +40,6 @@ impl RemoteLight {
         })
     }
 
-    #[allow(
-        dead_code,
-        reason = "unused within this task; EmbeddedLight (a later task) reuses this accessor"
-    )]
-    pub(crate) const fn rpc(&self) -> &LightRpc {
-        &self.rpc
-    }
-
     /// Shared by both light backends: compare filter progress to the tip.
     pub(crate) async fn light_status(rpc: &LightRpc) -> BackendStatus {
         let tip = match rpc.tip_header().await {
