@@ -1,0 +1,130 @@
+//! Paging cursors that cannot represent an exhausted scan.
+//!
+//! CKB's indexer returns `last_cursor: "0x"` once a scan is exhausted, and a
+//! later `get_cells` with `after: "0x"` returns nothing **forever**, even for
+//! a lock that holds cells. A pager that stores the terminal cursor therefore
+//! goes permanently blind, silently. Verified against CKB testnet 2026-09-10.
+//!
+//! Two rules live here and nowhere else: an empty page yields no next cursor,
+//! and a sentinel is not a cursor.
+
+use serde_json::Value;
+
+/// A resumable paging position.
+///
+/// Deliberately has no serde derives. A persisted cursor is a footgun: the
+/// only safe way to revive one is through [`Cursor::resumable`], which
+/// rejects the sentinel. If a future plan needs to persist paging state, it
+/// must store the raw string and re-validate on read rather than deriving
+/// `Deserialize` here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cursor(String);
+
+impl Cursor {
+    /// The sentinels a CKB node uses for "nothing further".
+    const SENTINELS: [&'static str; 2] = ["0x", "0X"];
+
+    /// Build a cursor, or `None` when the value cannot be resumed from.
+    pub fn resumable(raw: &str) -> Option<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || Self::SENTINELS.contains(&trimmed) {
+            return None;
+        }
+        Some(Self(trimmed.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One page of a cell scan.
+///
+/// `next` is `None` whenever the scan cannot usefully continue, which is both
+/// when the page came back empty and when the node handed back a sentinel.
+#[derive(Debug, Clone)]
+pub struct CellPage {
+    pub cells: Vec<Value>,
+    pub next: Option<Cursor>,
+}
+
+impl CellPage {
+    /// The single enforcement point for both cursor rules.
+    pub fn new(cells: Vec<Value>, last_cursor: &str) -> Self {
+        let next = if cells.is_empty() {
+            None
+        } else {
+            Cursor::resumable(last_cursor)
+        };
+        Self { cells, next }
+    }
+
+    /// Whether a pager driving this scan should stop.
+    pub const fn is_exhausted(&self) -> bool {
+        self.next.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CellPage, Cursor};
+
+    // The exact byte string a real testnet node returned mid-scan.
+    const REAL: &str = "0x409bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801";
+
+    #[test]
+    fn sentinels_are_not_resumable() {
+        assert!(
+            Cursor::resumable("0x").is_none(),
+            "the exhausted-scan sentinel"
+        );
+        assert!(Cursor::resumable("").is_none(), "an absent cursor");
+        assert!(Cursor::resumable("   ").is_none(), "whitespace only");
+        assert!(Cursor::resumable("0X").is_none(), "uppercase sentinel");
+    }
+
+    #[test]
+    fn a_real_cursor_round_trips() {
+        let c = Cursor::resumable(REAL).expect("a real cursor resumes");
+        assert_eq!(c.as_str(), REAL);
+    }
+
+    #[test]
+    fn an_empty_page_never_carries_a_next_cursor() {
+        // Even if a node handed back something cursor-shaped on an empty page,
+        // there is nothing left to fetch and storing it risks the poison.
+        let page = CellPage::new(Vec::new(), REAL);
+        assert!(page.cells.is_empty());
+        assert!(page.next.is_none(), "empty page must not resume");
+        assert!(page.is_exhausted());
+    }
+
+    #[test]
+    fn a_full_page_carries_its_cursor() {
+        let page = CellPage::new(vec![serde_json::json!({"cell": 1})], REAL);
+        assert_eq!(page.cells.len(), 1);
+        assert_eq!(page.next.as_ref().map(Cursor::as_str), Some(REAL));
+        assert!(!page.is_exhausted());
+    }
+
+    #[test]
+    fn the_live_exhaustion_sequence_terminates() {
+        // Replays what testnet actually does: a full page, then an empty page
+        // whose last_cursor is "0x". A pager driven by `next` must stop, and
+        // must not have retained anything to feed back in.
+        let page1 = CellPage::new(vec![serde_json::json!({"cell": 1})], REAL);
+        assert!(page1.next.is_some(), "first page continues");
+        let page2 = CellPage::new(Vec::new(), "0x");
+        assert!(page2.next.is_none(), "exhausted scan stops");
+        assert!(page2.is_exhausted());
+    }
+
+    #[test]
+    fn a_non_empty_page_with_a_sentinel_cursor_also_stops() {
+        // Defence in depth: if a node ever returns rows plus "0x", resuming
+        // from "0x" would return nothing, so treat it as exhausted.
+        let page = CellPage::new(vec![serde_json::json!({"cell": 1})], "0x");
+        assert_eq!(page.cells.len(), 1, "rows are still delivered");
+        assert!(page.next.is_none(), "but the scan does not continue");
+    }
+}
