@@ -6,7 +6,8 @@
 //! goes permanently blind, silently. Verified against CKB testnet 2026-09-10.
 //!
 //! Two rules live here and nowhere else: an empty page yields no next cursor,
-//! and a sentinel is not a cursor.
+//! and a sentinel is not a cursor — and the private fields are what keep it
+//! that way.
 
 use serde_json::Value;
 
@@ -44,12 +45,14 @@ impl Cursor {
 /// when the page came back empty and when the node handed back a sentinel.
 #[derive(Debug, Clone)]
 pub struct CellPage {
-    pub cells: Vec<Value>,
-    pub next: Option<Cursor>,
+    cells: Vec<Value>,
+    next: Option<Cursor>,
 }
 
 impl CellPage {
-    /// The single enforcement point for both cursor rules.
+    /// The only way to build a page, and the single enforcement point for
+    /// both cursor rules. The fields are private precisely so this cannot be
+    /// sidestepped with a struct literal.
     pub fn new(cells: Vec<Value>, last_cursor: &str) -> Self {
         let next = if cells.is_empty() {
             None
@@ -57,6 +60,20 @@ impl CellPage {
             Cursor::resumable(last_cursor)
         };
         Self { cells, next }
+    }
+
+    pub fn cells(&self) -> &[Value] {
+        &self.cells
+    }
+
+    /// Take ownership of the rows, for callers accumulating across pages.
+    #[must_use]
+    pub fn into_cells(self) -> Vec<Value> {
+        self.cells
+    }
+
+    pub const fn next(&self) -> Option<&Cursor> {
+        self.next.as_ref()
     }
 
     /// Whether a pager driving this scan should stop.
@@ -94,16 +111,16 @@ mod tests {
         // Even if a node handed back something cursor-shaped on an empty page,
         // there is nothing left to fetch and storing it risks the poison.
         let page = CellPage::new(Vec::new(), REAL);
-        assert!(page.cells.is_empty());
-        assert!(page.next.is_none(), "empty page must not resume");
+        assert!(page.cells().is_empty());
+        assert!(page.next().is_none(), "empty page must not resume");
         assert!(page.is_exhausted());
     }
 
     #[test]
     fn a_full_page_carries_its_cursor() {
         let page = CellPage::new(vec![serde_json::json!({"cell": 1})], REAL);
-        assert_eq!(page.cells.len(), 1);
-        assert_eq!(page.next.as_ref().map(Cursor::as_str), Some(REAL));
+        assert_eq!(page.cells().len(), 1);
+        assert_eq!(page.next().map(Cursor::as_str), Some(REAL));
         assert!(!page.is_exhausted());
     }
 
@@ -113,9 +130,9 @@ mod tests {
         // whose last_cursor is "0x". A pager driven by `next` must stop, and
         // must not have retained anything to feed back in.
         let page1 = CellPage::new(vec![serde_json::json!({"cell": 1})], REAL);
-        assert!(page1.next.is_some(), "first page continues");
+        assert!(page1.next().is_some(), "first page continues");
         let page2 = CellPage::new(Vec::new(), "0x");
-        assert!(page2.next.is_none(), "exhausted scan stops");
+        assert!(page2.next().is_none(), "exhausted scan stops");
         assert!(page2.is_exhausted());
     }
 
@@ -124,7 +141,20 @@ mod tests {
         // Defence in depth: if a node ever returns rows plus "0x", resuming
         // from "0x" would return nothing, so treat it as exhausted.
         let page = CellPage::new(vec![serde_json::json!({"cell": 1})], "0x");
-        assert_eq!(page.cells.len(), 1, "rows are still delivered");
-        assert!(page.next.is_none(), "but the scan does not continue");
+        assert_eq!(page.cells().len(), 1, "rows are still delivered");
+        assert!(page.next().is_none(), "but the scan does not continue");
+    }
+
+    #[test]
+    fn a_page_can_only_be_built_through_new() {
+        // If the fields were public a caller could pair an empty page with a
+        // live cursor and resurrect the poison. They are private, so the only
+        // route is `new`, which refuses. This test documents the reason;
+        // making it fail requires re-publishing the fields, which will not
+        // compile against these accessors.
+        let page = CellPage::new(Vec::new(), REAL);
+        assert!(page.next().is_none());
+        assert!(page.cells().is_empty());
+        assert!(page.into_cells().is_empty());
     }
 }
