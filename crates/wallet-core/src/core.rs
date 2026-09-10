@@ -204,6 +204,7 @@ impl WalletCore {
             lock_args,
             derivation: Some(derivation),
             created_at: now_unix(),
+            watch_from_block: None,
         };
         let record = to_record(
             &stored,

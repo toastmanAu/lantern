@@ -65,6 +65,7 @@ mod tests {
                 index: 4,
             }),
             created_at: 1,
+            watch_from_block: None,
         };
         let caps = AccountCapabilities {
             can_sign: true,

@@ -1,4 +1,4 @@
-//! On-disk account list: `accounts.json` = `{ "version": 1, "accounts": [...] }`.
+//! On-disk account list: `accounts.json` = `{ "version": 2, "origin": ..., "accounts": [...] }`.
 //! Public data only. Writes are tmp-then-rename.
 
 use std::fs;
@@ -9,7 +9,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::RegistryError;
 
-const FILE_VERSION: u32 = 1;
+const FILE_VERSION: u32 = 2;
+
+/// How the wallet behind this registry was opened.
+///
+/// It decides the start height of a newly derived account: a wallet created
+/// moments ago has no history, an imported one may have years of it. Plan 1c's
+/// `WalletCore` does not remember this across a lock/unlock cycle, so it is
+/// persisted here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WalletOrigin {
+    Created,
+    Imported,
+}
+
+impl Default for WalletOrigin {
+    /// A file that does not say is assumed to be an import, which scans more
+    /// than necessary rather than missing history.
+    fn default() -> Self {
+        Self::Imported
+    }
+}
 
 /// What `accounts.json` holds per account. Public data only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,11 +44,20 @@ pub struct StoredAccount {
     pub lock_args: Vec<u8>,
     pub derivation: Option<Derivation>,
     pub created_at: u64,
+    /// Height a light backend should begin filtering from.
+    ///
+    /// `None` means "not yet determined": it arises only for an account
+    /// created on a freshly created wallet before a backend was attached, and
+    /// is resolved to the tip at first sync. Imports record `Some(0)`.
+    #[serde(default)]
+    pub watch_from_block: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct AccountsFile {
     version: u32,
+    #[serde(default)]
+    origin: WalletOrigin,
     accounts: Vec<StoredAccount>,
 }
 
@@ -40,6 +70,7 @@ pub fn account_id(lock_type: LockType, lock_args: &[u8]) -> String {
 #[derive(Debug)]
 pub struct AccountRegistry {
     path: PathBuf,
+    origin: WalletOrigin,
     accounts: Vec<StoredAccount>,
 }
 
@@ -51,19 +82,51 @@ impl AccountRegistry {
         if !path.exists() {
             return Ok(Self {
                 path,
+                origin: WalletOrigin::default(),
                 accounts: Vec::new(),
             });
         }
         let bytes = fs::read(&path)?;
-        let file: AccountsFile =
+        let mut file: AccountsFile =
             serde_json::from_slice(&bytes).map_err(|_| RegistryError::Corrupt)?;
-        if file.version != FILE_VERSION {
-            return Err(RegistryError::Corrupt);
+        match file.version {
+            1 => {
+                // A v1 file cannot say how the wallet was opened, and its
+                // accounts carry no start height. Assume an import and scan
+                // from genesis: slow, never wrong.
+                file.origin = WalletOrigin::Imported;
+                for account in &mut file.accounts {
+                    account.watch_from_block = Some(0);
+                }
+            }
+            FILE_VERSION => {}
+            _ => return Err(RegistryError::Corrupt),
         }
         Ok(Self {
             path,
+            origin: file.origin,
             accounts: file.accounts,
         })
+    }
+
+    pub const fn origin(&self) -> WalletOrigin {
+        self.origin
+    }
+
+    /// Record how the wallet was opened. Called once, at creation or import.
+    pub const fn set_origin(&mut self, origin: WalletOrigin) {
+        self.origin = origin;
+    }
+
+    /// Fill in a start height that was not known when the account was made.
+    pub fn set_watch_from_block(&mut self, id: &str, block: u64) -> Result<(), RegistryError> {
+        let account = self
+            .accounts
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or(RegistryError::NotFound)?;
+        account.watch_from_block = Some(block);
+        Ok(())
     }
 
     pub fn add(&mut self, account: StoredAccount) -> Result<(), RegistryError> {
@@ -120,6 +183,7 @@ impl AccountRegistry {
     pub fn save(&self) -> Result<(), RegistryError> {
         let file = AccountsFile {
             version: FILE_VERSION,
+            origin: self.origin,
             accounts: self.accounts.clone(),
         };
         let json = serde_json::to_vec_pretty(&file).map_err(|_| RegistryError::Corrupt)?;
@@ -137,7 +201,7 @@ mod tests {
     use lantern_sdk_schema::{Derivation, LockType};
     use tempfile::tempdir;
 
-    use super::{AccountRegistry, StoredAccount, account_id};
+    use super::{AccountRegistry, StoredAccount, WalletOrigin, account_id};
     use crate::error::RegistryError;
 
     fn acct(index: u32, args: u8) -> StoredAccount {
@@ -150,6 +214,7 @@ mod tests {
             lock_args,
             derivation: Some(Derivation { change: 0, index }),
             created_at: 1_700_000_000,
+            watch_from_block: None,
         }
     }
 
@@ -180,7 +245,7 @@ mod tests {
             reg.save().expect("saves");
         }
         let text = std::fs::read_to_string(&path).expect("reads");
-        assert!(text.contains("\"version\": 1"), "{text}");
+        assert!(text.contains("\"version\": 2"), "{text}");
         assert!(
             text.contains("\"lockArgs\": \"1111111111111111111111111111111111111111\""),
             "{text}"
@@ -219,7 +284,7 @@ mod tests {
             AccountRegistry::open(&path),
             Err(RegistryError::Corrupt)
         ));
-        std::fs::write(&path, br#"{ "version": 2, "accounts": [] }"#).expect("writes");
+        std::fs::write(&path, br#"{ "version": 99, "accounts": [] }"#).expect("writes");
         assert!(matches!(
             AccountRegistry::open(&path),
             Err(RegistryError::Corrupt)
@@ -253,5 +318,93 @@ mod tests {
         reg.add(acct(5, 0x33)).expect("adds");
         assert_eq!(reg.next_index(LockType::Secp256k1Blake160, 0), 6);
         assert_eq!(reg.next_index(LockType::Secp256k1Blake160, 1), 0);
+    }
+
+    #[test]
+    fn a_v1_file_migrates_to_v2_conservatively() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("accounts.json");
+        // A real plan 1c file: version 1, no origin, no watchFromBlock.
+        let v1 = r#"{
+          "version": 1,
+          "accounts": [{
+            "id": "secp256k1_blake160-1111111111111111111111111111111111111111",
+            "label": "Main",
+            "lockType": "secp256k1_blake160",
+            "extensionId": "core.secp256k1",
+            "lockArgs": "1111111111111111111111111111111111111111",
+            "derivation": { "change": 0, "index": 0 },
+            "createdAt": 1700000000
+          }]
+        }"#;
+        std::fs::write(&path, v1).expect("writes");
+
+        let reg = AccountRegistry::open(&path).expect("opens a v1 file");
+        assert_eq!(
+            reg.origin(),
+            WalletOrigin::Imported,
+            "a v1 file cannot say; assume the worst"
+        );
+        assert_eq!(
+            reg.list()[0].watch_from_block,
+            Some(0),
+            "scan everything rather than risk missing history"
+        );
+
+        reg.save().expect("saves");
+        let text = std::fs::read_to_string(&path).expect("reads");
+        assert!(text.contains("\"version\": 2"), "{text}");
+        assert!(text.contains("\"origin\": \"imported\""), "{text}");
+        assert!(text.contains("\"watchFromBlock\": 0"), "{text}");
+    }
+
+    #[test]
+    fn a_v2_file_round_trips_with_origin_and_heights() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("accounts.json");
+        {
+            let mut reg = AccountRegistry::open(&path).expect("opens empty");
+            reg.set_origin(WalletOrigin::Created);
+            let mut account = acct(0, 0x11);
+            account.watch_from_block = Some(22_000_000);
+            reg.add(account).expect("adds");
+            reg.save().expect("saves");
+        }
+        let reg = AccountRegistry::open(&path).expect("reopens");
+        assert_eq!(reg.origin(), WalletOrigin::Created);
+        assert_eq!(reg.list()[0].watch_from_block, Some(22_000_000));
+    }
+
+    #[test]
+    fn a_future_version_is_still_corrupt() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("accounts.json");
+        std::fs::write(
+            &path,
+            r#"{ "version": 3, "origin": "created", "accounts": [] }"#,
+        )
+        .expect("writes");
+        assert!(matches!(
+            AccountRegistry::open(&path),
+            Err(RegistryError::Corrupt)
+        ));
+    }
+
+    #[test]
+    fn a_start_height_can_be_resolved_later() {
+        let dir = tempdir().expect("tempdir");
+        let mut reg = AccountRegistry::open(dir.path().join("accounts.json")).expect("opens");
+        reg.add(acct(0, 0x11)).expect("adds");
+        let id = acct(0, 0x11).id;
+        assert_eq!(reg.get(&id).expect("present").watch_from_block, None);
+        reg.set_watch_from_block(&id, 22_000_000).expect("resolves");
+        assert_eq!(
+            reg.get(&id).expect("present").watch_from_block,
+            Some(22_000_000)
+        );
+        assert!(matches!(
+            reg.set_watch_from_block("nope", 1),
+            Err(RegistryError::NotFound)
+        ));
     }
 }
