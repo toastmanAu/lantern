@@ -12,7 +12,26 @@ description = "Lantern chain backend — abstraction over light client / full no
 workspace = true
 
 [dependencies]
+lantern-sdk-schema = { path = "../sdk-schema" }
+ckb-jsonrpc-types.workspace = true
+ckb-types.workspace = true
+reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+toml.workspace = true
 async-trait.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
+hex.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }
+
+[features]
+# In-process fake JSON-RPC server, used by this crate's tests and by wallet-core's.
+testing = []
+
+[dev-dependencies]
+tempfile = "3.10"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
