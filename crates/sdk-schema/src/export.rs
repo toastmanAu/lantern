@@ -93,4 +93,22 @@ mod tests {
             "snake_case leaked:\n{ts}"
         );
     }
+
+    #[test]
+    fn backend_status_is_a_state_tagged_union_the_frontend_can_match_on() {
+        // `BackendStatus` is what the React frontend pattern-matches on to
+        // drive the connection UI. Pin the exact discriminated-union shape
+        // so a refactor that flattens the union or renames the tag fails
+        // here, not silently in the UI.
+        let ts = typescript_bindings().expect("export succeeds");
+        for needle in [
+            "{ state: \"connecting\" }",
+            "{ state: \"syncing\"; current: number; target: number }",
+            "{ state: \"synced\"; tip: number }",
+            "{ state: \"error\"; message: string }",
+            "{ state: \"stopped\" }",
+        ] {
+            assert!(ts.contains(needle), "missing {needle} in:\n{ts}");
+        }
+    }
 }

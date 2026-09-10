@@ -73,6 +73,15 @@ region = "4.0"
 # the toolchain is pinned at 1.92, so both are exact-pinned here.
 ckb-jsonrpc-types = "=1.1.1"
 ckb-types = "=1.1.1"
+
+# ckb-types pulls in 11 further ckb-* crates transitively, none of them
+# pinned directly in this manifest — their versions are held down only by
+# Cargo.lock, for the same 1.92-vs-1.95 MSRV reason as the pins above:
+# ckb-constant, ckb-error, ckb-fixed-hash, ckb-fixed-hash-core,
+# ckb-fixed-hash-macros, ckb-gen-types, ckb-merkle-mountain-range,
+# ckb-occupied-capacity, ckb-occupied-capacity-core,
+# ckb-occupied-capacity-macros, ckb-rational. Do not `cargo update -p` any
+# of these without first bumping the toolchain past 1.95.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "http2", "charset"] }
 toml = "0.9"
 

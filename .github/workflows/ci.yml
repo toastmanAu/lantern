@@ -51,6 +51,12 @@ jobs:
       - name: cargo test (vault without mlock)
         run: cargo test -p lantern-vault --no-default-features
 
+      - name: cargo test (chain-backend with the fake node)
+        run: cargo test -p lantern-chain-backend --features testing
+
+      - name: cargo test (chain-backend, no-default-features build guard)
+        run: cargo test -p lantern-chain-backend
+
   frontend:
     name: Frontend workspace
     runs-on: ubuntu-24.04

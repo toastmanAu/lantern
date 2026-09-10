@@ -4,7 +4,7 @@
 > Tauri 2 shell + Rust core + React/TypeScript frontend.
 > Working title — final name TBD.
 
-**Status:** Plans 1a (scaffold), 1b (vault) and 1c (accounts + secp256k1 signing) complete. Next: plan 1d (chain backend).
+**Status:** Plans 1a (scaffold), 1b (vault), 1c (accounts + secp256k1 signing) and 1d (chain backend + light-client supervision) complete. Next: plan 1e (tx-builder).
 
 ## Documents
 

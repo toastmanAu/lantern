@@ -46,6 +46,7 @@ After plan 1d, Lantern can reach a CKB chain through any of four interchangeable
 | §18 tuple naming | **backend profile**, not "profile" | 1c already uses "profile" for the directory holding `vault.bin`; two meanings of one word will bite |
 | Sync progress (light) | target = `get_tip_header().number`; current = min `block_number` over `get_scripts()` | Header sync and filter sync advance independently; the user cares about filter sync |
 | Sync progress (full) | `get_indexer_tip` against chain tip | Matches the readiness probe already proven in the fiber-web work |
+| Supervisor restarts | On demand, from `ensure_running` before an RPC call, not a background watchdog task | Simpler lifecycle, no idle polling loop; trade-off is that a crash between calls is invisible until the next call is attempted, rather than being noticed and repaired within one poll interval |
 
 ## 4. Crate map
 
@@ -185,12 +186,15 @@ impl BackendManager {
     pub fn current_network(&self) -> Network;
     pub fn current_backend(&self) -> Option<&dyn ChainBackend>;
     pub async fn activate(&mut self, profile_id: &str) -> Result<(), BackendError>;
+    pub async fn activate_backend(&mut self, profile_id: &str, backend: Box<dyn ChainBackend>) -> Result<(), BackendError>;
     pub async fn shutdown(&mut self) -> Result<(), BackendError>;
     pub fn save(&self) -> Result<(), BackendError>;
 }
 ```
 
 `backends.json` is `{ "version": 1, "activeProfileId": "...", "profiles": [...] }`, plaintext and public, written tmp-then-rename like `accounts.json`. Missing file yields the two defaults from §6's first-run behaviour: mainnet embedded-light and testnet embedded-light, with mainnet active.
+
+`activate_backend` adopts an already-constructed backend rather than building one from the profile: `EmbeddedLight` needs a light-client binary `PathBuf` that plan 1f resolves (bundled sidecar path, platform-specific), which `BackendManager` cannot derive from a `BackendProfile` alone. `activate` stays the path for the other three kinds, which are fully describable by their profile; `activate_backend` stops the current backend, starts the supplied one, and records it the same way `activate` does.
 
 `activate` stops the current backend, starts the new one, probes capabilities, and re-registers watched scripts. Switching backend within a network never touches accounts; switching network changes which accounts are in view, since §18 scopes accounts to a network.
 
@@ -220,7 +224,7 @@ impl WalletCore {
 }
 ```
 
-- `create_account` records `watch_from_block` by origin: `Some(0)` on a wallet opened through `import` (it may have arbitrary history); on a wallet opened through `create`, `Some(tip)` if a backend is attached, otherwise `None` for `sync_watched_scripts` to resolve to the tip. Origin is read from `accounts.json`'s top-level `origin` field, so it survives a lock/unlock cycle.
+- `create_account` records `watch_from_block` by origin alone, and stays synchronous: `Some(0)` on a wallet opened through `import` (it may have arbitrary history); `None` on a wallet opened through `create`, for `sync_watched_scripts` to resolve to the tip later, whether or not a backend happens to be attached at creation time. (An earlier draft of this design had `create_account` record `Some(tip)` directly when a backend was already attached, which would have made it `async`. Dropped: the outcome is identical either way, because nothing can reach a brand-new address before the first sync runs, so resolving the start height eagerly at `create_account` time buys nothing.) Origin is read from `accounts.json`'s top-level `origin` field, so it survives a lock/unlock cycle.
 - `sync_watched_scripts` collects every account's script for the active network and calls `watch_scripts`. Invoked on attach, on account creation, and after `activate`.
 - **`unlock` verifies the registry** (the plan 1c final-review carry-over): for every account carrying a `Derivation`, re-derive `lock_args` through its `LockModule` and compare. An account whose `derivation` is `None` is treated as a mismatch, not skipped — nothing in the wallet creates one today, and skipping it would let an attacker null the field to smuggle a swapped `lock_args` past verification. Any mismatch (including a nulled derivation) is `CoreError::RegistryMismatch { account_id }`. Cost is one PBKDF2 plus n derivations, single-digit milliseconds. `accounts.json` is plaintext by design, so this is the cheapest integrity guarantee that does not require authenticating the file. When watch-only or hardware accounts arrive (plan 1e+), they will carry no derivable material by design and this rejection rule cannot apply to them as-is — that plan must authenticate `accounts.json` itself (a MAC keyed by a vault subkey, which plan 1b's `Vault::extension_subkey` already makes available) rather than reinstating a skip.
 
