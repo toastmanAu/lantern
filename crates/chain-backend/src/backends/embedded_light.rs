@@ -23,7 +23,20 @@ use crate::supervisor::{Supervisor, SupervisorConfig, SupervisorHealth};
 struct Inner {
     supervisor: Option<Supervisor>,
     rpc: Option<Arc<LightRpc>>,
+    /// Port the cached `rpc` client was built against, so staleness after a
+    /// restart can be checked by integer comparison instead of substring
+    /// matching against the URL.
+    last_port: Option<u16>,
     config: SupervisorConfig,
+}
+
+/// Whether a cached RPC client, built for `cached` port, still matches the
+/// supervisor's current port. `None` means nothing is cached yet.
+const fn client_is_stale(cached: Option<u16>, current: u16) -> bool {
+    match cached {
+        Some(cached) => cached != current,
+        None => true,
+    }
 }
 
 /// The default backend: a supervised `ckb-light-client`.
@@ -47,6 +60,7 @@ impl EmbeddedLight {
             inner: Mutex::new(Inner {
                 supervisor: None,
                 rpc: None,
+                last_port: None,
                 config,
             }),
         }
@@ -54,8 +68,14 @@ impl EmbeddedLight {
 
     /// Clone out the RPC handle, restarting a crashed child first.
     ///
-    /// The lock is released before any network call, so queries do not queue
-    /// behind one another.
+    /// In steady state the lock is held only across a non-blocking
+    /// `try_wait()`, so queries never queue behind one another. On the
+    /// crash-restart (or first-start) path, though, it is held across the
+    /// full readiness wait, which serialises every concurrent caller. That is
+    /// deliberate: the child is down either way, a released lock would only
+    /// buy callers a prompt `NotReady`, and the alternative (a `starting`
+    /// flag dropped outside the lock) leaks permanently if a caller's future
+    /// is cancelled mid-wait.
     async fn rpc(&self) -> Result<Arc<LightRpc>, BackendError> {
         let mut inner = self.inner.lock().await;
         let Some(supervisor) = inner.supervisor.as_mut() else {
@@ -64,15 +84,12 @@ impl EmbeddedLight {
         supervisor.ensure_running().await?;
         let port = supervisor.port();
         // A restart moves the port, so rebuild the client when it changes.
-        let stale = inner
-            .rpc
-            .as_ref()
-            .is_none_or(|rpc| !rpc.url().contains(&port.to_string()));
-        if stale {
+        if client_is_stale(inner.last_port, port) {
             inner.rpc = Some(Arc::new(LightRpc::new(
                 format!("http://127.0.0.1:{port}/"),
                 DEFAULT_TIMEOUT,
             )?));
+            inner.last_port = Some(port);
         }
         inner.rpc.clone().ok_or(BackendError::NotReady)
     }
@@ -150,12 +167,15 @@ impl ChainBackend for EmbeddedLight {
         if inner.supervisor.is_some() {
             return Ok(());
         }
+        // Held across the full readiness wait, same as `rpc()`'s restart
+        // branch — see the comment there.
         let supervisor = Supervisor::start(inner.config.clone()).await?;
         let port = supervisor.port();
         inner.rpc = Some(Arc::new(LightRpc::new(
             format!("http://127.0.0.1:{port}/"),
             DEFAULT_TIMEOUT,
         )?));
+        inner.last_port = Some(port);
         inner.supervisor = Some(supervisor);
         drop(inner);
         Ok(())
@@ -163,11 +183,43 @@ impl ChainBackend for EmbeddedLight {
 
     async fn stop(&self) -> Result<(), BackendError> {
         let mut inner = self.inner.lock().await;
+        // Held across SIGTERM + up to `SHUTDOWN_GRACE` of `child.wait()` —
+        // not a network call, but the same serialising effect as `rpc()`.
         if let Some(mut supervisor) = inner.supervisor.take() {
             supervisor.stop().await?;
         }
         inner.rpc = None;
+        inner.last_port = None;
         drop(inner);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_is_stale;
+
+    #[test]
+    fn nothing_cached_yet_is_stale() {
+        assert!(client_is_stale(None, 12345));
+    }
+
+    #[test]
+    fn unchanged_port_is_not_stale() {
+        assert!(!client_is_stale(Some(12345), 12345));
+    }
+
+    #[test]
+    fn new_port_whose_digits_are_a_substring_of_the_old_one_is_stale() {
+        // Old bug: "234" is a substring of "12345", so the old
+        // `.contains(&port.to_string())` check would call this fresh.
+        assert!(client_is_stale(Some(12345), 234));
+    }
+
+    #[test]
+    fn new_port_whose_digits_appear_in_the_loopback_address_is_stale() {
+        // Old bug: "27" is a substring of "127.0.0.1", so the old check
+        // would never rebuild for this port no matter the cached value.
+        assert!(client_is_stale(Some(8114), 27));
     }
 }
