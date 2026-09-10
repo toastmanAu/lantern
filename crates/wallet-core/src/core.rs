@@ -245,7 +245,7 @@ impl WalletCore {
     ///
     /// Async because the start height is settled here, against the attached
     /// backend, rather than deferred to the first sync — see
-    /// [`Self::start_height_for_new_account`].
+    /// `start_height_for_new_account`.
     ///
     /// # Errors
     ///
@@ -377,8 +377,8 @@ impl WalletCore {
     /// is the difference between syncing and sitting idle forever.
     ///
     /// Heights are never resolved here: `create_account` settles them (see
-    /// [`Self::start_height_for_new_account`]), so this call is idempotent
-    /// and reads only. A `None` height can still reach here from a
+    /// `start_height_for_new_account`), so this call is idempotent and reads
+    /// only. A `None` height can still reach here from a
     /// hand-edited `accounts.json`; it is treated as `0`, never as the tip.
     ///
     /// # Errors

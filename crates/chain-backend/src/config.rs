@@ -14,9 +14,19 @@ use crate::error::BackendError;
 const MAINNET_TEMPLATE: &str = include_str!("../assets/mainnet.toml");
 const TESTNET_TEMPLATE: &str = include_str!("../assets/testnet.toml");
 
+/// The subdirectory name a network's store lives under.
+const fn network_slug(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "mainnet",
+        Network::Testnet => "testnet",
+    }
+}
+
 /// Everything Lantern controls in a light-client config.
 #[derive(Debug, Clone)]
 pub struct LightClientConfig {
+    /// Root for this client's files. Everything actually lands in a
+    /// per-network subdirectory of it — see [`Self::network_dir`].
     pub data_dir: PathBuf,
     pub network: Network,
     /// JSON-RPC port, allocated fresh on every spawn.
@@ -33,6 +43,17 @@ impl LightClientConfig {
         }
     }
 
+    /// Where this network's store, peer database and generated config live.
+    ///
+    /// A per-network subdirectory rather than an equality check: `data_dir`
+    /// is supplied by the caller and nothing else stops the same one being
+    /// handed to a mainnet and a testnet client, which would put two chains
+    /// into one `RocksDB` store. Separating them structurally makes the
+    /// collision unrepresentable instead of merely detectable.
+    pub fn network_dir(&self) -> PathBuf {
+        self.data_dir.join(network_slug(self.network))
+    }
+
     /// Render the config, keeping the template's bootnodes and replacing only
     /// the paths and ports.
     ///
@@ -45,7 +66,7 @@ impl LightClientConfig {
             BackendError::Spawn(format!("vendored template is not valid TOML: {e}"))
         })?;
 
-        let dir = self.data_dir.display().to_string();
+        let dir = self.network_dir().display().to_string();
         set_path(&mut doc, "store", "path", format!("{dir}/store"))?;
         set_path(&mut doc, "network", "path", format!("{dir}/network"))?;
 
@@ -85,8 +106,9 @@ impl LightClientConfig {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::create_dir_all(self.data_dir.join("store"))?;
-        std::fs::create_dir_all(self.data_dir.join("network"))?;
+        let dir = self.network_dir();
+        std::fs::create_dir_all(dir.join("store"))?;
+        std::fs::create_dir_all(dir.join("network"))?;
         std::fs::write(path, self.render()?)?;
         Ok(())
     }
@@ -165,6 +187,34 @@ mod tests {
         assert!(
             rendered.contains("/ip4/"),
             "no bootnode entries:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn two_networks_sharing_a_data_dir_do_not_share_a_store() {
+        // Nothing stops a caller handing the same `data_dir` to both, and one
+        // RocksDB store holding two chains is not a recoverable state.
+        let testnet = config();
+        let mainnet = LightClientConfig {
+            network: Network::Mainnet,
+            ..config()
+        };
+        assert_ne!(testnet.network_dir(), mainnet.network_dir());
+        assert!(
+            testnet
+                .render()
+                .expect("renders")
+                .contains("/testnet/store"),
+            "{}",
+            testnet.render().expect("renders")
+        );
+        assert!(
+            mainnet
+                .render()
+                .expect("renders")
+                .contains("/mainnet/store"),
+            "{}",
+            mainnet.render().expect("renders")
         );
     }
 

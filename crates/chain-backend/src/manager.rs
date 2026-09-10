@@ -106,12 +106,17 @@ impl BackendManager {
     /// # Errors
     ///
     /// Returns [`BackendError::DuplicateProfile`] if a profile with the same
-    /// id is already registered.
+    /// id is already registered, or whatever [`Self::save`] produces — in
+    /// which case the profile is not added, in memory or on disk.
     pub fn add_profile(&mut self, profile: BackendProfile) -> Result<(), BackendError> {
         if self.profiles.iter().any(|p| p.id == profile.id) {
             return Err(BackendError::DuplicateProfile);
         }
         self.profiles.push(profile);
+        if let Err(e) = self.save() {
+            self.profiles.pop();
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -122,6 +127,8 @@ impl BackendManager {
     /// removed profile is the one currently running. On a `stop()` failure
     /// the profile list is left untouched, so a failed graceful shutdown
     /// never silently edits the list out from under a still-running backend.
+    /// A failed [`Self::save`] puts the profile back in memory, so the two
+    /// views cannot diverge.
     pub async fn remove_profile(&mut self, id: &str) -> Result<(), BackendError> {
         let index = self
             .profiles
@@ -134,7 +141,11 @@ impl BackendManager {
             }
             self.active_id = None;
         }
-        self.profiles.remove(index);
+        let removed = self.profiles.remove(index);
+        if let Err(e) = self.save() {
+            self.profiles.insert(index, removed);
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -160,8 +171,9 @@ impl BackendManager {
     ///
     /// Returns [`BackendError::ProfileNotFound`] if `profile_id` is not
     /// registered, [`BackendError::Unsupported`] for a remote profile
-    /// without an endpoint or for the embedded kind, and whatever error the
-    /// chosen backend's constructor or `start` produces otherwise.
+    /// without an endpoint or for the embedded kind, whatever error the
+    /// chosen backend's constructor or `start` produces otherwise, and
+    /// whatever [`Self::save`] produces when persisting the new selection.
     pub async fn activate(&mut self, profile_id: &str) -> Result<(), BackendError> {
         let profile = self
             .profiles
@@ -216,7 +228,10 @@ impl BackendManager {
         backend.start().await?;
         self.active = Some(backend);
         self.active_id = Some(profile.id);
-        Ok(())
+        // Persist the choice. Without this a user who switches to testnet is
+        // back on `default-mainnet` after a restart, which is exactly the
+        // wrong-network hazard `WalletCore::attach_backend` now guards.
+        self.save()
     }
 
     /// Adopt an already-constructed backend, for the embedded kind.
@@ -224,8 +239,9 @@ impl BackendManager {
     /// # Errors
     ///
     /// Returns [`BackendError::ProfileNotFound`] if `profile_id` is not
-    /// registered, or whatever error stopping the previous backend or
-    /// starting the new one produces.
+    /// registered, whatever error stopping the previous backend or starting
+    /// the new one produces, or whatever [`Self::save`] produces when
+    /// persisting the new selection.
     pub async fn activate_backend(
         &mut self,
         profile_id: &str,
@@ -240,7 +256,7 @@ impl BackendManager {
         backend.start().await?;
         self.active = Some(backend);
         self.active_id = Some(profile_id.to_string());
-        Ok(())
+        self.save()
     }
 
     /// # Errors
@@ -641,5 +657,63 @@ mod tests {
             "shutdown must stop the active backend"
         );
         assert!(manager.current_backend().is_none());
+    }
+
+    #[tokio::test]
+    async fn profile_mutations_survive_a_restart() {
+        // `save()` had no caller anywhere in the tree, so a user who added a
+        // profile and switched to testnet was back on `default-mainnet` after
+        // a restart — which, with chain-independent lock args, silently
+        // delivers mainnet cells to a testnet-labelled wallet.
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("backends.json");
+        let node = FakeNode::builder()
+            .respond(
+                "local_node_info",
+                json!({
+                    "version": "0.5.5", "node_id": "QmTestNode", "active": true,
+                    "addresses": [], "protocols": [], "connections": "0x0"
+                }),
+            )
+            .start()
+            .await;
+
+        {
+            let mut manager = BackendManager::open(&path).expect("opens");
+            manager
+                .add_profile(BackendProfile {
+                    endpoint: Some(node.url()),
+                    ..profile("remote-testnet", Network::Testnet, BackendKind::RemoteLight)
+                })
+                .expect("adds");
+            manager.activate("remote-testnet").await.expect("activates");
+        }
+
+        let reopened = BackendManager::open(&path).expect("reopens");
+        assert!(
+            reopened.profiles().iter().any(|p| p.id == "remote-testnet"),
+            "the added profile must survive"
+        );
+        assert_eq!(
+            reopened.current_network(),
+            Network::Testnet,
+            "the active selection must survive, not fall back to default-mainnet"
+        );
+
+        {
+            let mut manager = BackendManager::open(&path).expect("reopens");
+            manager
+                .remove_profile("default-mainnet")
+                .await
+                .expect("removes");
+        }
+        let reopened = BackendManager::open(&path).expect("reopens");
+        assert!(
+            !reopened
+                .profiles()
+                .iter()
+                .any(|p| p.id == "default-mainnet"),
+            "a removal must survive too"
+        );
     }
 }

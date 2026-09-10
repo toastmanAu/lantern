@@ -183,9 +183,19 @@ async fn repeated_fast_crashes_open_the_circuit_and_stop_retrying() {
     cfg.extra_env
         .push(("FAKE_LC_EXIT_AFTER_MS".into(), "60".into()));
 
-    // Died during startup: no supervisor to drive, and nothing spun.
-    let Ok(mut sup) = Supervisor::start(cfg).await else {
-        return;
+    // Died during startup: no supervisor to drive, and nothing spun. Say so
+    // out loud — a silent early return here reports green while every
+    // breaker assertion below is skipped.
+    let mut sup = match Supervisor::start(cfg).await {
+        Ok(sup) => sup,
+        Err(e) => {
+            eprintln!(
+                "SKIPPED repeated_fast_crashes_open_the_circuit_and_stop_retrying: \
+                 the stub died before readiness ({e}), so the breaker assertions \
+                 did not run"
+            );
+            return;
+        }
     };
     for _ in 0..40 {
         let _ = sup.ensure_running().await;

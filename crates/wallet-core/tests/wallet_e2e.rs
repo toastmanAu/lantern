@@ -585,7 +585,7 @@ async fn attaching_a_backend_on_another_network_is_refused() {
 async fn syncing_without_a_backend_reports_not_ready() {
     let dir = tempdir().expect("tempdir");
     let paths = ProfilePaths::in_dir(dir.path());
-    let (mut core, _phrase) =
+    let (core, _phrase) =
         WalletCore::create(paths, b"pw", Network::Testnet, WordCount::Words12).expect("creates");
     let result = core.sync_watched_scripts().await;
     assert!(matches!(

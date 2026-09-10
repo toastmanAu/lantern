@@ -171,7 +171,7 @@ impl Supervisor {
 Lifecycle, per §5:
 
 1. **Port.** Bind `127.0.0.1:0`, read the assigned port, drop the listener, write that port into the generated config. Racy in principle; the ready-poll catches a lost race and the supervisor retries with a fresh port.
-2. **Config.** Generated into `data_dir/light-client.toml`: network chain spec, RPC listen address, store path, log level. Regenerated on every start so a stale port can never be reused.
+2. **Config.** Generated into `data_dir/<network>/light-client.toml`: network chain spec, RPC listen address, store path, log level. Regenerated on every start so a stale port can never be reused. The store, the peer database and the config all live under a per-network subdirectory of `data_dir`: nothing stops a caller handing the same `data_dir` to a mainnet and a testnet client, and one RocksDB store holding two chains is not a recoverable state, so the separation is structural rather than checked.
 3. **Spawn.** `tokio::process::Command` with the `run` subcommand and `--config-file`, stdout and stderr piped.
 4. **Ready.** Poll `local_node_info` with backoff (100ms doubling to 2s) until success or `ready_timeout`.
 5. **Logs.** Two tasks read the piped streams line by line and re-emit through `tracing` at `debug`, tagged with the subprocess PID.
@@ -199,6 +199,10 @@ impl BackendManager {
 ```
 
 `backends.json` is `{ "version": 1, "activeProfileId": "...", "profiles": [...] }`, plaintext and public, written tmp-then-rename like `accounts.json`. Missing file yields the two defaults from §6's first-run behaviour: mainnet embedded-light and testnet embedded-light, with mainnet active.
+
+`add_profile`, `remove_profile`, `activate` and `activate_backend` each call `save` before returning. `save` having no caller left a user who switched to testnet back on `default-mainnet` after a restart — which, given that lock args are chain-independent, is the wrong-network hazard delivered by default. `add_profile` and `remove_profile` roll their in-memory change back if the write fails, so the two views cannot diverge.
+
+**Chain identity.** `FullNode::start` calls `get_blockchain_info` and refuses a node whose `chain` field (`"ckb"` / `"ckb_testnet"`) does not match the profile's `Network`, with `BackendError::NetworkMismatch`. **The light client has no equivalent**: its RPC surface (listed in §4.2) has no `get_blockchain_info`, so a `RemoteLight` profile pointed at the wrong chain is still unverified. `EmbeddedLight` is not exposed to this — Lantern generates its config from the network-specific vendored template, so its chain is ours to choose, not a user-typed endpoint's. Closing the `RemoteLight` gap would mean comparing `get_genesis_block`'s hash against pinned per-network constants; that is left for a later slice rather than approximated here.
 
 `activate_backend` adopts an already-constructed backend rather than building one from the profile: `EmbeddedLight` needs a light-client binary `PathBuf` that plan 1f resolves (bundled sidecar path, platform-specific), which `BackendManager` cannot derive from a `BackendProfile` alone. `activate` stays the path for the other three kinds, which are fully describable by their profile; `activate_backend` stops the current backend, starts the supplied one, and records it the same way `activate` does.
 

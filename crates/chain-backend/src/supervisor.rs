@@ -118,6 +118,13 @@ impl std::fmt::Debug for Supervisor {
 /// Inherently a race: something else could take the port before the child
 /// binds it. The readiness poll is what catches that, and the caller retries
 /// with a fresh port.
+///
+/// The window is real and deliberately left open: two `Supervisor::start`
+/// calls racing here can be handed the same port, and the loser's child
+/// fails to bind. `ensure_running` recovers by restarting with a fresh port,
+/// and closing the window properly means holding the listener open until the
+/// child inherits it, which the light client's config-file interface does not
+/// support.
 fn free_port() -> Result<u16, BackendError> {
     let listener = StdTcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -158,7 +165,9 @@ impl Supervisor {
             rpc_port,
             p2p_port,
         };
-        let config_path = config.data_dir.join("light-client.toml");
+        // Under the per-network subdirectory too, so a mainnet and a testnet
+        // client sharing a `data_dir` cannot overwrite each other's config.
+        let config_path = lc_config.network_dir().join("light-client.toml");
         lc_config.write_to(&config_path)?;
 
         let mut child = Command::new(&config.binary)
@@ -230,10 +239,10 @@ impl Supervisor {
     /// Idempotent — calling it on an already-stopped supervisor succeeds and
     /// leaves `last_shutdown` at whatever the first call recorded.
     pub async fn stop(&mut self) -> Result<(), BackendError> {
-        for task in self.log_tasks.drain(..) {
-            task.abort();
-        }
         let Some(mut child) = self.child.take() else {
+            for task in self.log_tasks.drain(..) {
+                task.abort();
+            }
             self.health = SupervisorHealth::Stopped;
             return Ok(());
         };
@@ -263,6 +272,13 @@ impl Supervisor {
             let _ = child.wait().await;
             ShutdownKind::Forced
         };
+
+        // Only now: aborting the forwarders before the child is reaped throws
+        // away everything it says on the way out, including store-flush
+        // failures — exactly the lines worth having.
+        for task in self.log_tasks.drain(..) {
+            task.abort();
+        }
 
         self.last_shutdown = Some(shutdown_kind);
         self.health = SupervisorHealth::Stopped;
