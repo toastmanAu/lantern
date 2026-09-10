@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use lantern_chain_backend::supervisor::{
-    ShutdownKind, Supervisor, SupervisorConfig, SupervisorHealth,
+    RestartPolicy, ShutdownKind, Supervisor, SupervisorConfig, SupervisorHealth,
 };
 use lantern_sdk_schema::Network;
 
@@ -16,7 +16,18 @@ fn config(dir: &std::path::Path) -> SupervisorConfig {
         network: Network::Testnet,
         log_level: "info".to_string(),
         ready_timeout: Duration::from_secs(10),
+        policy: RestartPolicy::default(),
         extra_env: Vec::new(),
+    }
+}
+
+/// A policy with tiny timings so the tests stay fast.
+const fn brisk_policy() -> RestartPolicy {
+    RestartPolicy {
+        backoff_base: Duration::from_millis(10),
+        backoff_cap: Duration::from_millis(40),
+        breaker_threshold: 3,
+        breaker_window: Duration::from_secs(60),
     }
 }
 
@@ -123,4 +134,88 @@ async fn a_well_behaved_child_is_stopped_gracefully_not_killed() {
         Some(ShutdownKind::Graceful),
         "the child should have exited on the signal, not needed killing"
     );
+}
+
+#[tokio::test]
+async fn a_crashed_child_is_restarted_on_the_next_call() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cfg = config(dir.path());
+    cfg.policy = brisk_policy();
+    cfg.extra_env
+        .push(("FAKE_LC_EXIT_AFTER_MS".into(), "150".into()));
+
+    let mut sup = Supervisor::start(cfg).await.expect("starts");
+    let first_port = sup.port();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    // Drive it until the restart lands; backoff means the first call may
+    // legitimately report NotReady.
+    let mut restarted = false;
+    for _ in 0..20 {
+        if sup.ensure_running().await.is_ok() {
+            restarted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert!(
+        restarted,
+        "a dead child must come back, health={:?}",
+        sup.health()
+    );
+    assert_ne!(sup.port(), first_port, "a restart takes a fresh port");
+    sup.stop().await.expect("stops");
+}
+
+#[tokio::test]
+async fn repeated_fast_crashes_open_the_circuit_and_stop_retrying() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cfg = config(dir.path());
+    cfg.policy = brisk_policy();
+    // 1ms (the brief's original value) made the stub die before the
+    // readiness poll could ever complete, so `Supervisor::start` failed on
+    // every run observed and the breaker path below was never reached. 60ms
+    // reliably clears readiness first, then lets the crash loop run; kept
+    // well under the 60s `breaker_window` so three fast exits still count as
+    // fast. Startup could still fail on a slow enough machine — the breaker
+    // must trip rather than spin forever either way, so that path stays as a
+    // documented fallback.
+    cfg.extra_env
+        .push(("FAKE_LC_EXIT_AFTER_MS".into(), "60".into()));
+
+    // Died during startup: no supervisor to drive, and nothing spun.
+    let Ok(mut sup) = Supervisor::start(cfg).await else {
+        return;
+    };
+    for _ in 0..40 {
+        let _ = sup.ensure_running().await;
+        if matches!(sup.health(), SupervisorHealth::CircuitOpen) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        matches!(sup.health(), SupervisorHealth::CircuitOpen),
+        "expected the breaker to open, health={:?}",
+        sup.health()
+    );
+    // Once open it stays open rather than hammering the binary.
+    let err = sup.ensure_running().await.expect_err("circuit is open");
+    assert!(
+        matches!(err, lantern_chain_backend::BackendError::Spawn(_)),
+        "{err:?}"
+    );
+    sup.stop().await.expect("stops");
+}
+
+#[tokio::test]
+async fn a_healthy_child_needs_no_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cfg = config(dir.path());
+    cfg.policy = brisk_policy();
+    let mut sup = Supervisor::start(cfg).await.expect("starts");
+    let port = sup.port();
+    sup.ensure_running().await.expect("already running");
+    assert_eq!(sup.port(), port, "no needless restart");
+    sup.stop().await.expect("stops");
 }

@@ -3,6 +3,7 @@
 //! Lantern owns this process: it generates the config, allocates the ports,
 //! waits for readiness, forwards the logs, and reaps it on exit.
 
+use std::collections::VecDeque;
 use std::net::TcpListener as StdTcpListener;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -39,6 +40,8 @@ pub struct SupervisorConfig {
     pub network: Network,
     pub log_level: String,
     pub ready_timeout: Duration,
+    /// How aggressively a crashed child is brought back.
+    pub policy: RestartPolicy,
     /// Extra environment variables for the child process.
     ///
     /// Tests use this to steer the stub binary's failure modes (see
@@ -46,6 +49,29 @@ pub struct SupervisorConfig {
     /// environment with `std::env::set_var`, which is unsafe under this
     /// crate's edition and racy across tests running in parallel regardless.
     pub extra_env: Vec<(String, String)>,
+}
+
+/// How aggressively a crashed child is brought back.
+#[derive(Debug, Clone)]
+pub struct RestartPolicy {
+    pub backoff_base: Duration,
+    pub backoff_cap: Duration,
+    /// Exits within `breaker_window` that trip the breaker.
+    pub breaker_threshold: u32,
+    pub breaker_window: Duration,
+}
+
+impl Default for RestartPolicy {
+    fn default() -> Self {
+        // Spec §5: 1s, 2s, 4s, 8s capped at 30s; five crashes in sixty
+        // seconds stops auto-restart and surfaces the failure.
+        Self {
+            backoff_base: Duration::from_secs(1),
+            backoff_cap: Duration::from_secs(30),
+            breaker_threshold: 5,
+            breaker_window: Duration::from_secs(60),
+        }
+    }
 }
 
 /// How the last shutdown actually went.
@@ -70,6 +96,12 @@ pub struct Supervisor {
     log_tasks: Vec<JoinHandle<()>>,
     config: SupervisorConfig,
     last_shutdown: Option<ShutdownKind>,
+    /// Timestamps of recent exits, used to detect a fast-crash loop.
+    exits: VecDeque<Instant>,
+    /// When the next restart attempt is allowed, set by backoff.
+    next_attempt_at: Option<Instant>,
+    /// How many times this supervisor has restarted its child.
+    restarts: u32,
 }
 
 impl std::fmt::Debug for Supervisor {
@@ -157,6 +189,9 @@ impl Supervisor {
             log_tasks,
             config,
             last_shutdown: None,
+            exits: VecDeque::new(),
+            next_attempt_at: None,
+            restarts: 0,
         };
 
         if let Err(e) = supervisor.await_ready().await {
@@ -232,6 +267,108 @@ impl Supervisor {
         self.last_shutdown = Some(shutdown_kind);
         self.health = SupervisorHealth::Stopped;
         Ok(())
+    }
+
+    /// Make sure a child is running, restarting a crashed one within policy.
+    ///
+    /// Called before serving a query and when reporting status, rather than
+    /// from a background watchdog: no shared mutable state, and every path is
+    /// deterministic to test.
+    pub async fn ensure_running(&mut self) -> Result<(), BackendError> {
+        if matches!(self.health, SupervisorHealth::CircuitOpen) {
+            return Err(BackendError::Spawn(
+                "light client restarted too many times; not retrying".into(),
+            ));
+        }
+
+        // Still alive? Nothing to do.
+        if let Some(child) = self.child.as_mut() {
+            match child.try_wait() {
+                Ok(None) => return Ok(()),
+                Ok(Some(status)) => {
+                    tracing::warn!("light client exited with {status}");
+                    self.record_exit();
+                }
+                Err(e) => return Err(BackendError::Spawn(e.to_string())),
+            }
+        }
+        self.child = None;
+
+        if matches!(self.health, SupervisorHealth::CircuitOpen) {
+            return Err(BackendError::Spawn(
+                "light client restarted too many times; not retrying".into(),
+            ));
+        }
+
+        if let Some(at) = self.next_attempt_at
+            && Instant::now() < at
+        {
+            self.health = SupervisorHealth::Restarting {
+                attempt: self.restarts,
+            };
+            return Err(BackendError::NotReady);
+        }
+
+        self.restarts = self.restarts.saturating_add(1);
+        let replacement = Self::start(self.config.clone()).await?;
+        self.adopt(replacement);
+        Ok(())
+    }
+
+    /// Note a crash and open the breaker if they are coming too fast.
+    fn record_exit(&mut self) {
+        let now = Instant::now();
+        self.exits.push_back(now);
+        while let Some(front) = self.exits.front() {
+            if now.duration_since(*front) > self.config.policy.breaker_window {
+                self.exits.pop_front();
+            } else {
+                break;
+            }
+        }
+        if u32::try_from(self.exits.len()).unwrap_or(u32::MAX)
+            >= self.config.policy.breaker_threshold
+        {
+            tracing::error!(
+                "light client crashed {} times within {:?}; giving up",
+                self.exits.len(),
+                self.config.policy.breaker_window
+            );
+            self.health = SupervisorHealth::CircuitOpen;
+            return;
+        }
+        let shift = self.restarts.min(16);
+        let backoff = self
+            .config
+            .policy
+            .backoff_base
+            .saturating_mul(1_u32 << shift)
+            .min(self.config.policy.backoff_cap);
+        self.next_attempt_at = Some(now + backoff);
+    }
+
+    /// Take over a freshly started supervisor's child, keeping crash history.
+    ///
+    /// `other` is a `Supervisor` returned by `start` inside `ensure_running`;
+    /// it exists only to carry the new child out of that call. Only the
+    /// fields describing the *live process* move across — `child`, the
+    /// port it bound, and the log-forwarding tasks reading its stdout and
+    /// stderr. `exits`, `restarts` and `last_shutdown` stay on `self`
+    /// because they are this supervisor's own history, not the donor's:
+    /// `other` was never restarted and never stopped, so its versions of
+    /// those fields are just their initial values and would erase what
+    /// `self` has recorded. Taking `child` (via `Option::take`) and
+    /// `log_tasks` (via `mem::take`) leaves `other` inert, so when it is
+    /// dropped at the end of `ensure_running` its `Child` field is `None`
+    /// and `kill_on_drop` has nothing left to kill.
+    fn adopt(&mut self, mut other: Self) {
+        self.child = other.child.take();
+        self.rpc_port = other.rpc_port;
+        self.log_tasks = std::mem::take(&mut other.log_tasks);
+        self.next_attempt_at = None;
+        self.health = SupervisorHealth::Running {
+            restarts: self.restarts,
+        };
     }
 
     /// Poll `local_node_info` until it answers or the deadline passes.
