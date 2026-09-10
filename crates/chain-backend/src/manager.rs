@@ -686,6 +686,20 @@ mod tests {
                     ..profile("remote-testnet", Network::Testnet, BackendKind::RemoteLight)
                 })
                 .expect("adds");
+
+            // Assert the ADD alone reached disk, before activating. `save()`
+            // writes the whole profile list, so a later `activate` would cover
+            // for an `add_profile` that never saved — the two guards would mask
+            // each other and deleting either one on its own would stay green.
+            let after_add = BackendManager::open(&path).expect("reopens mid-test");
+            assert!(
+                after_add
+                    .profiles()
+                    .iter()
+                    .any(|p| p.id == "remote-testnet"),
+                "add_profile must persist on its own, not rely on a later activate"
+            );
+
             manager.activate("remote-testnet").await.expect("activates");
         }
 

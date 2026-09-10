@@ -46,9 +46,16 @@ pub struct StoredAccount {
     pub created_at: u64,
     /// Height a light backend should begin filtering from.
     ///
-    /// `None` means "not yet determined": it arises only for an account
-    /// created on a freshly created wallet before a backend was attached, and
-    /// is resolved to the tip at first sync. Imports record `Some(0)`.
+    /// Always settled when the account is created, never later: the tip at
+    /// creation time if a backend was attached and reachable, otherwise `0`.
+    /// Imports record `0`, since an imported seed may have arbitrary history.
+    ///
+    /// `None` therefore only reaches this field from a v1 file mid-migration
+    /// or a hand-edited v2 one, and every reader must treat it as `0`.
+    /// **Never resolve it to a tip read later than creation** — the account's
+    /// address is handed out the moment it is created, so a height read at any
+    /// later moment can sit above the block that funded it, and the account
+    /// then reads as empty forever with nothing reporting an error.
     #[serde(default)]
     pub watch_from_block: Option<u64>,
 }
@@ -118,7 +125,18 @@ impl AccountRegistry {
         self.origin = origin;
     }
 
-    /// Fill in a start height that was not known when the account was made.
+    /// Move an account's filter start height, for an explicit, user-initiated
+    /// rescan ("scan this account again from block N").
+    ///
+    /// **Not for resolving a deferred height.** Start heights are settled in
+    /// `create_account` and are never left pending; see the note on
+    /// [`StoredAccount::watch_from_block`] for why a later-read tip loses
+    /// funds. Lowering a height also costs a real rescan on a light backend,
+    /// so this is a deliberate user action, not a repair path.
+    ///
+    /// # Errors
+    ///
+    /// [`RegistryError::NotFound`] if no account has this id.
     pub fn set_watch_from_block(&mut self, id: &str, block: u64) -> Result<(), RegistryError> {
         let account = self
             .accounts
