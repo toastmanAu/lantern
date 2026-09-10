@@ -16,6 +16,14 @@ use crate::error::BackendError;
 use crate::full::FullRpc;
 use crate::query::{CellQuery, WatchedScript};
 
+/// What `get_blockchain_info` calls each chain.
+const fn chain_name(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "ckb",
+        Network::Testnet => "ckb_testnet",
+    }
+}
+
 /// A CKB full node, probed once at connect.
 #[derive(Debug)]
 pub struct FullNode {
@@ -142,8 +150,22 @@ impl ChainBackend for FullNode {
         Ok(())
     }
 
+    /// Confirm the endpoint answers *and* that it is on the chain this
+    /// profile claims.
+    ///
+    /// Nothing else in the stack compares the two: lock args are
+    /// chain-independent, so a testnet profile pointed at a mainnet node
+    /// produces no error, just `ckt1…` addresses over mainnet cells and a
+    /// tx builder that would spend them for real.
     async fn start(&self) -> Result<(), BackendError> {
-        self.rpc.local_node_info().await.map(|_| ())
+        self.rpc.local_node_info().await?;
+        let expected = chain_name(self.network);
+        let actual = self.rpc.chain_name().await?;
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(BackendError::NetworkMismatch { expected, actual })
+        }
     }
 
     async fn stop(&self) -> Result<(), BackendError> {
@@ -276,5 +298,56 @@ mod tests {
     #[tokio::test]
     async fn probing_a_dead_local_port_reports_absence_not_an_error() {
         assert!(FullNode::probe_local("http://127.0.0.1:1/").await.is_none());
+    }
+
+    fn node_info() -> serde_json::Value {
+        json!({
+            "version": "0.200.0", "node_id": "QmTestNode", "active": true,
+            "addresses": [], "protocols": [], "connections": "0x0"
+        })
+    }
+
+    #[tokio::test]
+    async fn starting_against_the_wrong_chain_is_refused() {
+        // The default profile list makes `default-mainnet` active on a fresh
+        // install, so a user who unlocks a testnet wallet is one attach away
+        // from querying mainnet cells behind ckt1… addresses.
+        let node = FakeNode::builder()
+            .respond("get_indexer_tip", tip("0x64"))
+            .respond("local_node_info", node_info())
+            .respond("get_blockchain_info", json!({"chain": "ckb"}))
+            .start()
+            .await;
+        let backend = FullNode::connect(Network::Testnet, BackendKind::RemoteFull, node.url())
+            .await
+            .expect("connects");
+        let err = backend.start().await.expect_err("must refuse");
+        assert!(
+            matches!(
+                &err,
+                crate::BackendError::NetworkMismatch { expected, actual }
+                    if *expected == "ckb_testnet" && actual == "ckb"
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn starting_against_the_right_chain_succeeds() {
+        let node = FakeNode::builder()
+            .respond("get_indexer_tip", tip("0x64"))
+            .respond("local_node_info", node_info())
+            .respond("get_blockchain_info", json!({"chain": "ckb_testnet"}))
+            .start()
+            .await;
+        let backend = FullNode::connect(Network::Testnet, BackendKind::RemoteFull, node.url())
+            .await
+            .expect("connects");
+        backend.start().await.expect("same chain");
+        assert_eq!(
+            node.call_count("get_blockchain_info"),
+            1,
+            "the chain must actually be probed, not assumed"
+        );
     }
 }

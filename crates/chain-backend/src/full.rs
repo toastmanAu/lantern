@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ckb_jsonrpc_types::{HeaderView, LocalNode, Transaction, TransactionWithStatusResponse};
 use ckb_types::H256;
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::cursor::{CellPage, Cursor};
@@ -53,6 +54,28 @@ impl FullRpc {
     /// failure.
     pub async fn tip_header(&self) -> Result<HeaderView, BackendError> {
         self.rpc.call("get_tip_header", json!([])).await
+    }
+
+    /// Which chain this endpoint is actually on: `"ckb"` for mainnet,
+    /// `"ckb_testnet"` for testnet.
+    ///
+    /// Only the `chain` field is decoded. The rest of `get_blockchain_info`
+    /// (median time, epoch, difficulty, alerts) is irrelevant here and every
+    /// extra required field would be one more way for a node-version
+    /// difference to break a check that exists to prevent a spend on the
+    /// wrong chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError`] on any transport, decode, or node-side
+    /// failure.
+    pub async fn chain_name(&self) -> Result<String, BackendError> {
+        #[derive(Deserialize)]
+        struct ChainName {
+            chain: String,
+        }
+        let info: ChainName = self.rpc.call("get_blockchain_info", json!([])).await?;
+        Ok(info.chain)
     }
 
     /// The indexer's tip, or `None` when the node runs without an indexer.

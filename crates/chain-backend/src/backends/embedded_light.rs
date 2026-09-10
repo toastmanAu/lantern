@@ -162,19 +162,44 @@ impl ChainBackend for EmbeddedLight {
         self.rpc().await?.set_scripts_partial(scripts).await
     }
 
+    /// Bring the child up, or confirm it is already up.
+    ///
+    /// A supervisor whose breaker has tripped is still `Some`, with no child
+    /// and `ensure_running` refusing to retry. Returning `Ok(())` on that
+    /// would make a "Reconnect" button report success on every press while
+    /// the backend stayed dead, so an open (or stopped) supervisor is torn
+    /// down and replaced instead. That replacement *is* the explicit breaker
+    /// reset the supervisor's own policy defers to.
     async fn start(&self) -> Result<(), BackendError> {
         let mut inner = self.inner.lock().await;
-        if inner.supervisor.is_some() {
-            return Ok(());
+        match inner.supervisor.as_ref().map(Supervisor::health) {
+            Some(SupervisorHealth::Running { .. } | SupervisorHealth::Restarting { .. }) => {
+                return Ok(());
+            }
+            Some(SupervisorHealth::CircuitOpen | SupervisorHealth::Stopped) => {
+                if let Some(mut dead) = inner.supervisor.take() {
+                    dead.stop().await?;
+                }
+                inner.rpc = None;
+                inner.last_port = None;
+            }
+            None => {}
         }
         // Held across the full readiness wait, same as `rpc()`'s restart
         // branch — see the comment there.
-        let supervisor = Supervisor::start(inner.config.clone()).await?;
+        let mut supervisor = Supervisor::start(inner.config.clone()).await?;
         let port = supervisor.port();
-        inner.rpc = Some(Arc::new(LightRpc::new(
-            format!("http://127.0.0.1:{port}/"),
-            DEFAULT_TIMEOUT,
-        )?));
+        // Build the client before adopting the supervisor: if this fails, the
+        // supervisor would otherwise be dropped here and `kill_on_drop` would
+        // SIGKILL a child that has a graceful path.
+        let rpc = match LightRpc::new(format!("http://127.0.0.1:{port}/"), DEFAULT_TIMEOUT) {
+            Ok(rpc) => rpc,
+            Err(e) => {
+                let _ = supervisor.stop().await;
+                return Err(e);
+            }
+        };
+        inner.rpc = Some(Arc::new(rpc));
         inner.last_port = Some(port);
         inner.supervisor = Some(supervisor);
         drop(inner);

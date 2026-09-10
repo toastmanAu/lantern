@@ -154,7 +154,10 @@ impl LightRpc {
             .iter()
             .map(|w| (w.script.clone(), w.script_type))
             .collect();
-        *self.registered.lock().unwrap_or_else(|e| e.into_inner()) = keys;
+        *self
+            .registered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = keys;
         Ok(())
     }
 
@@ -184,7 +187,7 @@ impl LightRpc {
         let ours: Vec<ScriptKey> = self
             .registered
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         if ours.is_empty() {
             return Ok(None);
@@ -340,7 +343,7 @@ mod tests {
             .start()
             .await;
         let rpc = LightRpc::new(node.url(), Duration::from_secs(5)).expect("client");
-        rpc.set_scripts_partial(&[WatchedScript::lock(script(), 0x1554_ef4)])
+        rpc.set_scripts_partial(&[WatchedScript::lock(script(), 0x0155_4ef4)])
             .await
             .expect("registers");
 

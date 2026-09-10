@@ -31,6 +31,15 @@ pub enum BackendError {
     #[error("backend configuration file is corrupt or has an unsupported version")]
     Corrupt,
 
+    /// The endpoint answered for a different chain than the profile claims.
+    /// Nothing downstream would notice — lock args are chain-independent —
+    /// so this is caught at connect time or not at all.
+    #[error("backend is on chain {actual}, but this profile is configured for {expected}")]
+    NetworkMismatch {
+        expected: &'static str,
+        actual: String,
+    },
+
     #[error("no backend profile with that id")]
     ProfileNotFound,
 

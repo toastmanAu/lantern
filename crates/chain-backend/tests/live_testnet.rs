@@ -1,4 +1,19 @@
-//! Real-network checks, skipped unless `LANTERN_LIVE_TESTNET=1`.
+//! Real-network checks, `#[ignore]`d and additionally gated on
+//! `LANTERN_LIVE_TESTNET=1`.
+//!
+//! Run them with:
+//!
+//! ```text
+//! LANTERN_LIVE_TESTNET=1 cargo test -p lantern-chain-backend \
+//!     --features testing --test live_testnet -- --ignored
+//! ```
+//!
+//! Two gates, deliberately. The env check alone left a skipped run printing
+//! `test live_… ok`, indistinguishable from a real live pass — and CI never
+//! sets the variable, so those lines read "ok" in every CI run forever.
+//! `#[ignore]` makes cargo print `ignored` instead, and means a future CI
+//! edit would need *both* the variable and `-- --ignored` before it started
+//! hitting a public node.
 //!
 //! The hermetic suite proves the code does what the fixtures say. This proves
 //! the fixtures still describe reality — the gap that has bitten this project
@@ -26,9 +41,10 @@ fn funded_lock() -> ckb_jsonrpc_types::Script {
 }
 
 #[tokio::test]
+#[ignore = "live: set LANTERN_LIVE_TESTNET=1 and run with --ignored"]
 async fn live_paging_terminates_against_a_real_node() {
     if !enabled() {
-        eprintln!("skipped: set LANTERN_LIVE_TESTNET=1 to run");
+        eprintln!("skipped: LANTERN_LIVE_TESTNET is not 1");
         return;
     }
     let rpc = FullRpc::new(RPC, Duration::from_secs(30)).expect("client");
@@ -45,14 +61,21 @@ async fn live_paging_terminates_against_a_real_node() {
         }
         cursor = page.next().cloned();
     }
-    assert!(pages >= 1, "the scan ran");
+    assert!(
+        pages >= 2,
+        "expected at least two pages at limit(1): either cursor threading \
+         broke (page one reported itself exhausted, which a `pages >= 1` \
+         assertion could not tell from a working round trip) or the funded \
+         test address has drained below two cells — got {pages}"
+    );
     eprintln!("live scan terminated after {pages} pages");
 }
 
 #[tokio::test]
+#[ignore = "live: set LANTERN_LIVE_TESTNET=1 and run with --ignored"]
 async fn live_indexer_tip_reports_a_plausible_height() {
     if !enabled() {
-        eprintln!("skipped: set LANTERN_LIVE_TESTNET=1 to run");
+        eprintln!("skipped: LANTERN_LIVE_TESTNET is not 1");
         return;
     }
     let rpc = FullRpc::new(RPC, Duration::from_secs(30)).expect("client");
@@ -64,9 +87,10 @@ async fn live_indexer_tip_reports_a_plausible_height() {
 }
 
 #[tokio::test]
+#[ignore = "live: set LANTERN_LIVE_TESTNET=1 and run with --ignored"]
 async fn live_full_backend_reports_status() {
     if !enabled() {
-        eprintln!("skipped: set LANTERN_LIVE_TESTNET=1 to run");
+        eprintln!("skipped: LANTERN_LIVE_TESTNET is not 1");
         return;
     }
     let backend = lantern_chain_backend::backends::FullNode::connect(
