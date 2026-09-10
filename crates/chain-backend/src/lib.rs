@@ -21,7 +21,7 @@ pub mod rpc;
 pub mod testing;
 
 pub use backend::ChainBackend;
-pub use backends::RemoteLight;
+pub use backends::{FullNode, RemoteLight};
 pub use cursor::{CellPage, Cursor};
 pub use error::BackendError;
 pub use full::FullRpc;
