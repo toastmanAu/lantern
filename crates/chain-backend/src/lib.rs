@@ -11,6 +11,7 @@
 pub mod cursor;
 pub mod error;
 pub mod indexer;
+pub mod light;
 pub mod query;
 pub mod rpc;
 #[cfg(any(test, feature = "testing"))]
@@ -19,6 +20,7 @@ pub mod testing;
 pub use cursor::{CellPage, Cursor};
 pub use error::BackendError;
 pub use indexer::{IndexerCell, Order, Pagination, ScriptStatus, ScriptType, SearchKey, Tip};
+pub use light::LightRpc;
 pub use query::{CellQuery, WatchedScript};
 pub use rpc::RpcClient;
 
