@@ -12,11 +12,13 @@ pub mod cursor;
 pub mod error;
 pub mod indexer;
 pub mod query;
+pub mod rpc;
 
 pub use cursor::{CellPage, Cursor};
 pub use error::BackendError;
 pub use indexer::{IndexerCell, Order, Pagination, ScriptStatus, ScriptType, SearchKey, Tip};
 pub use query::{CellQuery, WatchedScript};
+pub use rpc::RpcClient;
 
 // Re-exported so downstream crates need not depend on `ckb-jsonrpc-types`
 // directly; these are the only chain types this crate's API exposes.
