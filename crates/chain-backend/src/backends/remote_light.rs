@@ -51,9 +51,14 @@ impl RemoteLight {
             }
         };
         match rpc.filter_progress().await {
-            // Nothing watched: there is nothing to sync, so the backend is as
-            // ready as it can be rather than stuck reporting 0 of tip.
-            Ok(None) => BackendStatus::Synced { tip },
+            // Nothing of ours is watched, so a light client is indexing
+            // nothing for us and `get_cells` is guaranteed to return nothing
+            // regardless of chain reality. `Synced` would make
+            // `is_usable()` — "queries can be trusted to return complete
+            // results" — true in the one state where it is certainly false.
+            // `Connecting` is not a stalled progress bar either, so the
+            // original concern (don't look stuck at "0 of tip") still holds.
+            Ok(None) => BackendStatus::Connecting,
             Ok(Some(current)) if current >= tip => BackendStatus::Synced { tip },
             Ok(Some(current)) => BackendStatus::Syncing {
                 current,
@@ -179,17 +184,32 @@ mod tests {
         );
     }
 
+    /// A `get_scripts` reply naming [`script`] at `height`.
+    fn progress_at(height: &str) -> serde_json::Value {
+        json!([{
+            "script": {
+                "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                "hash_type": "type",
+                "args": "0x72f72b0cafd31de5072b10e84fc6c9d7d7596db7"
+            },
+            "script_type": "lock",
+            "block_number": height
+        }])
+    }
+
     #[tokio::test]
     async fn status_is_syncing_until_the_slowest_script_reaches_the_tip() {
         let node = FakeNode::builder()
             .respond("get_tip_header", header("0x64"))
-            .respond("get_scripts", json!([{
-                "script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x11"},
-                "script_type": "lock", "block_number": "0x20"
-            }]))
+            .respond("get_scripts", progress_at("0x20"))
+            .respond("set_scripts", json!(null))
             .start()
             .await;
         let backend = RemoteLight::new(Network::Testnet, node.url()).expect("backend");
+        backend
+            .watch_scripts(&[WatchedScript::lock(script(), 0)])
+            .await
+            .expect("registers");
         assert_eq!(
             backend.status().await,
             BackendStatus::Syncing {
@@ -203,25 +223,39 @@ mod tests {
     async fn status_is_synced_once_filters_catch_up() {
         let node = FakeNode::builder()
             .respond("get_tip_header", header("0x64"))
-            .respond("get_scripts", json!([{
-                "script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x11"},
-                "script_type": "lock", "block_number": "0x64"
-            }]))
+            .respond("get_scripts", progress_at("0x64"))
+            .respond("set_scripts", json!(null))
             .start()
             .await;
         let backend = RemoteLight::new(Network::Testnet, node.url()).expect("backend");
+        backend
+            .watch_scripts(&[WatchedScript::lock(script(), 0)])
+            .await
+            .expect("registers");
         assert_eq!(backend.status().await, BackendStatus::Synced { tip: 0x64 });
     }
 
     #[tokio::test]
-    async fn with_nothing_watched_the_backend_is_synced_not_stuck_at_zero() {
+    async fn with_nothing_watched_the_backend_is_connecting_and_not_usable() {
+        // `filter_progress` returns `None` exactly when this client has
+        // registered nothing — the light client is indexing nothing for us,
+        // so `get_cells` returns nothing whatever the chain holds. Reporting
+        // `Synced` there would make `is_usable()` ("queries can be trusted to
+        // return complete results") true in the one state where it is
+        // certainly false. `Connecting` is also not a stalled progress bar,
+        // so the original "don't look stuck at 0 of tip" concern still holds.
         let node = FakeNode::builder()
             .respond("get_tip_header", header("0x64"))
             .respond("get_scripts", json!([]))
             .start()
             .await;
         let backend = RemoteLight::new(Network::Testnet, node.url()).expect("backend");
-        assert_eq!(backend.status().await, BackendStatus::Synced { tip: 0x64 });
+        let status = backend.status().await;
+        assert_eq!(status, BackendStatus::Connecting);
+        assert!(
+            !status.is_usable(),
+            "a backend watching nothing must not claim complete results"
+        );
     }
 
     #[tokio::test]
@@ -237,6 +271,7 @@ mod tests {
     #[tokio::test]
     async fn watch_scripts_registers_partially() {
         let node = FakeNode::builder()
+            .respond("get_scripts", json!([]))
             .respond("set_scripts", json!(null))
             .start()
             .await;
@@ -245,7 +280,11 @@ mod tests {
             .watch_scripts(&[WatchedScript::lock(script(), 100)])
             .await
             .expect("registers");
-        let (_, params) = node.calls().into_iter().next().expect("a call");
+        let (_, params) = node
+            .calls()
+            .into_iter()
+            .find(|(method, _)| method == "set_scripts")
+            .expect("a set_scripts call");
         assert_eq!(params[1], "partial");
     }
 }
