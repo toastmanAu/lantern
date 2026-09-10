@@ -37,4 +37,7 @@ pub enum CoreError {
 
     #[error("account carries no signing material")]
     NoSigningMaterial,
+
+    #[error("stored account {account_id} does not match the wallet seed")]
+    RegistryMismatch { account_id: String },
 }

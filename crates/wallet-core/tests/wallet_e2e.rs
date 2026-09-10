@@ -189,3 +189,50 @@ fn bad_phrase_on_import_leaves_no_vault_file() {
     // A correct retry on the same paths must now succeed.
     WalletCore::import(paths, b"pw", Network::Testnet, TANK).expect("retry succeeds");
 }
+
+#[test]
+fn unlock_rejects_a_tampered_accounts_file() {
+    let dir = tempdir().expect("tempdir");
+    let paths = ProfilePaths::in_dir(dir.path());
+    let real_args = {
+        let mut core =
+            WalletCore::import(paths.clone(), b"pw", Network::Testnet, TANK).expect("imports");
+        let account = core.create_account("Main").expect("account");
+        core.lock();
+        lock_args_of(&account)
+    };
+
+    // Swap the stored lock args for an attacker's, exactly as a local editor could.
+    let text = std::fs::read_to_string(&paths.accounts).expect("reads");
+    let tampered = text.replace(&hex::encode(&real_args), &"ab".repeat(20));
+    assert_ne!(tampered, text, "the fixture must actually change");
+    std::fs::write(&paths.accounts, tampered).expect("writes");
+
+    let err = WalletCore::unlock(paths.clone(), b"pw", Network::Testnet)
+        .expect_err("must refuse a tampered registry");
+    assert!(
+        matches!(err, CoreError::RegistryMismatch { .. }),
+        "expected RegistryMismatch, got {err:?}"
+    );
+
+    // Restoring the file makes it open again — the check is about content, not a latch.
+    std::fs::write(&paths.accounts, text).expect("restores");
+    WalletCore::unlock(paths, b"pw", Network::Testnet).expect("opens again");
+}
+
+#[test]
+fn unlock_accepts_an_untouched_registry_with_several_accounts() {
+    let dir = tempdir().expect("tempdir");
+    let paths = ProfilePaths::in_dir(dir.path());
+    {
+        let (mut core, _phrase) =
+            WalletCore::create(paths.clone(), b"pw", Network::Testnet, WordCount::Words12)
+                .expect("creates");
+        for label in ["One", "Two", "Three"] {
+            core.create_account(label).expect("account");
+        }
+        core.lock();
+    }
+    let core = WalletCore::unlock(paths, b"pw", Network::Testnet).expect("opens");
+    assert_eq!(core.accounts().expect("lists").len(), 3);
+}

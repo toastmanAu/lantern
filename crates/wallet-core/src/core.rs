@@ -50,6 +50,14 @@ pub struct WalletCore {
     paths: ProfilePaths,
 }
 
+impl std::fmt::Debug for WalletCore {
+    /// Opaque by design: the vault and account registry carry key-adjacent
+    /// state that must never round-trip through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalletCore").finish_non_exhaustive()
+    }
+}
+
 impl WalletCore {
     /// Create a new profile. Refuses to overwrite an existing vault or
     /// account file. Returns the phrase exactly once for the
@@ -104,6 +112,11 @@ impl WalletCore {
     }
 
     /// Open an existing profile.
+    ///
+    /// Re-derives every derived account's lock args and refuses a registry
+    /// that no longer matches the seed. `accounts.json` is plaintext, so this
+    /// is the cheapest integrity guarantee that does not require
+    /// authenticating the file.
     pub fn unlock(
         paths: ProfilePaths,
         password: &[u8],
@@ -114,13 +127,41 @@ impl WalletCore {
             return Err(CoreError::SeedMissing);
         }
         let accounts = AccountRegistry::open(&paths.accounts)?;
+        let locks = LockRegistry::with_first_party();
+        Self::verify_registry(&vault, &accounts, &locks)?;
         Ok(Self {
             vault,
             accounts,
-            locks: LockRegistry::with_first_party(),
+            locks,
             network,
             paths,
         })
+    }
+
+    /// Re-derive each derived account and compare against what is stored.
+    ///
+    /// Accounts without a `Derivation` (watch-only, later hardware) carry no
+    /// derivable material and are skipped rather than rejected.
+    fn verify_registry(
+        vault: &Vault,
+        accounts: &AccountRegistry,
+        locks: &LockRegistry,
+    ) -> Result<(), CoreError> {
+        for account in accounts.list() {
+            let Some(derivation) = account.derivation else {
+                continue;
+            };
+            let module = locks.get(account.lock_type)?;
+            let seed = Keyring::seed_for(vault, module.seed_kind())?;
+            let expected = module.derive_lock_args(seed.expose_secret(), &derivation)?;
+            drop(seed);
+            if expected != account.lock_args {
+                return Err(CoreError::RegistryMismatch {
+                    account_id: account.id.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Replace the lock modules (tests, future extension host).
