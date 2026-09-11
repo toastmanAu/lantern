@@ -1,12 +1,13 @@
 //! Lantern transaction builder.
 //!
-//! Generic tx construction with witness-size-aware fee estimation.
-//! Implementation lands in plan 1e.
+//! Pure: no I/O, no async, no dependency on `chain-backend`. Given candidate
+//! cells and parameters it returns an unsigned transaction plan. Every
+//! decision that can be wrong — capacity floors, the fee fixpoint, witness
+//! sizing, the size ceiling — is a pure function reachable from a test with
+//! no node.
 
 #![forbid(unsafe_code)]
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    const fn placeholder() {}
-}
+pub mod capacity;
+
+pub use capacity::{SHANNONS_PER_CKB, min_capacity, script_occupied_bytes};

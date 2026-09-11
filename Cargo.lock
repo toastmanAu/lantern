@@ -2380,6 +2380,9 @@ name = "lantern-tx-builder"
 version = "0.0.3"
 dependencies = [
  "async-trait",
+ "ckb-jsonrpc-types",
+ "ckb-types",
+ "hex",
  "thiserror 2.0.18",
  "tracing",
 ]
