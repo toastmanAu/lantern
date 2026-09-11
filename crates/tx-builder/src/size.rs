@@ -8,7 +8,6 @@
 //! exist.
 
 use ckb_types::packed::Transaction;
-use ckb_types::prelude::*;
 
 /// Practical ceiling on a single transaction's serialised size.
 ///
@@ -32,11 +31,24 @@ pub const MAX_TX_SIZE: usize = 597_000;
 
 /// Serialised size as the pool measures it.
 ///
-/// The `+ 4` is the size prefix a transaction carries in block
-/// serialisation.
+/// Delegates to `Transaction::serialized_size_in_block`, defined at
+/// `ckb-gen-types-1.1.1/src/extension/serialized_size.rs:42`
+/// (`TransactionReader::serialized_size_in_block`, `self.as_slice().len() +
+/// molecule::NUMBER_SIZE`) and exposed on the owned `Transaction` by the
+/// `impl_serialized_size_for_entity!` macro at line 46 of the same file.
+/// `molecule::NUMBER_SIZE` (4 bytes) is the offset entry a transaction
+/// occupies in a block's transaction dynvec — not a constant we keep in
+/// sync ourselves.
+///
+/// This is the same function CKB's own `SizeVerifier` calls to check a
+/// transaction against the block byte ceiling: see
+/// `ckb-verification-1.1.1/src/transaction_verifier.rs:315`,
+/// `self.transaction.data().serialized_size_in_block()`. Delegating means
+/// our measurement is the pool's measurement by definition, not by a
+/// formula we hope stays in sync with it.
 #[must_use]
 pub fn measure(tx: &Transaction) -> usize {
-    tx.as_slice().len() + 4
+    tx.serialized_size_in_block()
 }
 
 #[cfg(test)]
@@ -46,9 +58,12 @@ mod tests {
     use ckb_types::prelude::*;
 
     #[test]
-    fn size_is_the_serialised_length_plus_the_block_prefix() {
+    fn a_default_transaction_measures_to_seventy_two_bytes() {
+        // Pinned by direct observation of `measure` against a known input,
+        // the way `witness.rs`'s `a_65_byte_lock_serialises_to_85_bytes`
+        // pins 85 rather than restating the formula under test.
         let tx = Transaction::default();
-        assert_eq!(measure(&tx), tx.as_slice().len() + 4);
+        assert_eq!(measure(&tx), 72);
     }
 
     #[test]
