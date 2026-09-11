@@ -2383,6 +2383,7 @@ dependencies = [
  "ckb-jsonrpc-types",
  "ckb-types",
  "hex",
+ "lantern-sdk-schema",
  "thiserror 2.0.18",
  "tracing",
 ]
