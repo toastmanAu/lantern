@@ -454,7 +454,7 @@ mod tests {
 
     use lantern_sdk_schema::{
         AccountCapabilities, Derivation, LockError, LockModule, LockType, Network, ScriptTemplate,
-        SeedKind,
+        SeedKind, WitnessSize,
     };
     use tempfile::tempdir;
 
@@ -490,8 +490,8 @@ mod tests {
         fn seed_kind(&self) -> SeedKind {
             self.kind
         }
-        fn witness_lock_len(&self) -> usize {
-            1
+        fn witness_size(&self) -> WitnessSize {
+            WitnessSize::Fixed(1)
         }
         fn derive_lock_args(&self, seed: &[u8], d: &Derivation) -> Result<Vec<u8>, LockError> {
             self.seen.lock().expect("mutex").push(seed.len());

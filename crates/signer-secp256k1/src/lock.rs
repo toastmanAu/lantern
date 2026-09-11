@@ -2,6 +2,7 @@
 
 use lantern_sdk_schema::{
     AccountCapabilities, Derivation, LockError, LockModule, LockType, ScriptTemplate, SeedKind,
+    WitnessSize,
 };
 
 use crate::error::SignerError;
@@ -21,7 +22,6 @@ pub const SECP256K1_BLAKE160_CODE_HASH: [u8; 32] = [
 pub const HASH_TYPE_TYPE: u8 = 0x01;
 
 const BIP39_SEED_LEN: usize = 64;
-const WITNESS_LOCK_LEN: usize = 65;
 
 /// The first-party secp256k1 lock module. Carries no state.
 #[derive(Debug, Default, Clone, Copy)]
@@ -66,8 +66,11 @@ impl LockModule for Secp256k1Lock {
         SeedKind::Bip39Seed
     }
 
-    fn witness_lock_len(&self) -> usize {
-        WITNESS_LOCK_LEN
+    fn witness_size(&self) -> WitnessSize {
+        // RFC 0019: a recoverable signature is 65 bytes — r (32), s (32),
+        // recovery id (1). Fixed, so fee estimation is exact rather than
+        // conservative.
+        WitnessSize::Fixed(65)
     }
 
     fn derive_lock_args(&self, seed: &[u8], derivation: &Derivation) -> Result<Vec<u8>, LockError> {
@@ -88,7 +91,7 @@ impl LockModule for Secp256k1Lock {
 
 #[cfg(test)]
 mod tests {
-    use lantern_sdk_schema::{Derivation, LockError, LockModule, LockType, SeedKind};
+    use lantern_sdk_schema::{Derivation, LockError, LockModule, LockType, SeedKind, WitnessSize};
 
     use super::{HASH_TYPE_TYPE, SECP256K1_BLAKE160_CODE_HASH, Secp256k1Lock};
     use crate::hash::blake160;
@@ -107,7 +110,7 @@ mod tests {
         assert_eq!(m.lock_type(), LockType::Secp256k1Blake160);
         assert_eq!(m.extension_id(), "core.secp256k1");
         assert_eq!(m.seed_kind(), SeedKind::Bip39Seed);
-        assert_eq!(m.witness_lock_len(), 65);
+        assert_eq!(m.witness_size(), WitnessSize::Fixed(65));
         assert!(m.capabilities().can_sign);
         assert!(!m.capabilities().hardware);
         let t = m.script_template();

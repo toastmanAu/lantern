@@ -4,7 +4,8 @@
 //! `blake2b_256(tx_hash ‖ u64le(len(w0)) ‖ w0 ‖ Σ (u64le(len(wi)) ‖ wi))`
 //!
 //! `w0` is the first witness of the script group with its lock field
-//! already replaced by `witness_lock_len` zero bytes by the caller.
+//! already replaced by `witness_size().for_fee_estimate()` zero bytes by
+//! the caller.
 //! `others` are the remaining witnesses of the group followed by every
 //! witness beyond the input count. This module takes bytes; molecule
 //! layout is the transaction builder's concern (plan 1e).

@@ -15,5 +15,5 @@ pub mod types;
 pub use backend::{BackendCapabilities, BackendKind, BackendProfile, BackendStatus};
 pub use error::{LockError, SchemaError};
 pub use export::typescript_bindings;
-pub use lock::{LockModule, ScriptTemplate, SeedKind};
+pub use lock::{LockModule, ScriptTemplate, SeedKind, WitnessSize};
 pub use types::{AccountCapabilities, AccountRecord, Derivation, LockType, Network};

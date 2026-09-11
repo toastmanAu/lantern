@@ -24,6 +24,30 @@ pub enum SeedKind {
     RawEntropy,
 }
 
+/// How many bytes a lock module's signature occupies in the witness.
+///
+/// Post-quantum schemes make this a real question: Falcon-512 signatures
+/// range 666 to 1462 bytes, so a single number cannot describe them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WitnessSize {
+    Fixed(usize),
+    Variable { min: usize, max: usize },
+}
+
+impl WitnessSize {
+    /// The size fee estimation must use.
+    ///
+    /// Always the worst case. Undercharging gets the transaction rejected
+    /// by the pool; overcharging costs a rounding error.
+    #[must_use]
+    pub const fn for_fee_estimate(&self) -> usize {
+        match self {
+            Self::Fixed(n) => *n,
+            Self::Variable { max, .. } => *max,
+        }
+    }
+}
+
 /// Object-safe contract for a lock family.
 ///
 /// `seed` is a borrowed slice of whatever `seed_kind` asked for. Implementors
@@ -36,7 +60,7 @@ pub trait LockModule: Send + Sync {
     fn script_template(&self) -> ScriptTemplate;
     fn seed_kind(&self) -> SeedKind;
     /// Size of the witness lock placeholder for fee estimation.
-    fn witness_lock_len(&self) -> usize;
+    fn witness_size(&self) -> WitnessSize;
     fn derive_lock_args(&self, seed: &[u8], derivation: &Derivation) -> Result<Vec<u8>, LockError>;
     fn sign_digest(
         &self,
@@ -48,7 +72,7 @@ pub trait LockModule: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{LockModule, ScriptTemplate, SeedKind};
+    use super::{LockModule, ScriptTemplate, SeedKind, WitnessSize};
     use crate::error::LockError;
     use crate::types::{AccountCapabilities, Derivation, LockType};
 
@@ -76,8 +100,8 @@ mod tests {
         fn seed_kind(&self) -> SeedKind {
             SeedKind::RawEntropy
         }
-        fn witness_lock_len(&self) -> usize {
-            1
+        fn witness_size(&self) -> WitnessSize {
+            WitnessSize::Fixed(1)
         }
         fn derive_lock_args(&self, seed: &[u8], _: &Derivation) -> Result<Vec<u8>, LockError> {
             Ok(seed.to_vec())
@@ -90,6 +114,22 @@ mod tests {
         ) -> Result<Vec<u8>, LockError> {
             Ok(d.to_vec())
         }
+    }
+
+    #[test]
+    fn fee_estimation_uses_the_worst_case_witness_size() {
+        assert_eq!(WitnessSize::Fixed(65).for_fee_estimate(), 65);
+        // Falcon-512 ranges 666..=1462. Charging the minimum would get the
+        // transaction rejected by the pool; charging the maximum costs a
+        // rounding error. Always the maximum.
+        assert_eq!(
+            WitnessSize::Variable {
+                min: 666,
+                max: 1462
+            }
+            .for_fee_estimate(),
+            1462
+        );
     }
 
     #[test]
