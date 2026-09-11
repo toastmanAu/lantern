@@ -9,7 +9,9 @@
 #![forbid(unsafe_code)]
 
 pub mod capacity;
+pub mod size;
 pub mod witness;
 
 pub use capacity::{SHANNONS_PER_CKB, min_capacity, script_occupied_bytes};
+pub use size::{MAX_TX_SIZE, measure};
 pub use witness::{EMPTY_WITNESS, placeholder_witness};
