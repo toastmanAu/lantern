@@ -209,13 +209,13 @@ fn finish(
 
 #[cfg(test)]
 mod tests {
-    use super::build_transfer;
+    use super::{assemble, build_transfer};
     use crate::capacity::{SHANNONS_PER_CKB, min_capacity};
     use crate::fee::DEFAULT_FEE_RATE;
     use crate::{BuildError, TransferRequest};
     use ckb_jsonrpc_types::{CellDep, DepType, JsonBytes, OutPoint, Script, ScriptHashType};
     use ckb_types::H256;
-    use ckb_types::packed::WitnessArgs;
+    use ckb_types::packed::{CellDep as PackedCellDep, Script as PackedScript, WitnessArgs};
     use ckb_types::prelude::*;
     use lantern_sdk_schema::{Derivation, InputContext, WitnessSize};
 
@@ -387,11 +387,6 @@ mod tests {
         let plan = build_transfer(&req).expect("builds");
         assert_eq!(plan.groups.len(), 1);
         assert_eq!(plan.groups[0].input_indices.len(), plan.inputs.len());
-        // Not a new test, one line added to an existing one: without it
-        // nothing pins that the group's derivation comes from the request,
-        // and a builder that re-hardcoded a default would sign every
-        // non-default account with the wrong key, visible only on chain.
-        assert_eq!(plan.groups[0].derivation, req.derivation);
     }
     #[test]
     fn the_group_slot_holds_a_zero_locked_witness_args_and_every_other_slot_is_empty() {
@@ -446,5 +441,157 @@ mod tests {
         let plan = build_transfer(&req).expect("builds");
         assert!(plan.change.is_some(), "exercise the with-change branch");
         assert_eq!(plan.size, crate::size::measure(&plan.tx));
+    }
+    #[test]
+    fn the_group_carries_the_requests_derivation() {
+        // Its own test because its failure has nothing to do with grouping:
+        // a wrong derivation signs with the wrong key, which recovers to a
+        // different public key hash and fails on chain, and only for
+        // accounts that are not the default. The fixture's {1, 7} is what
+        // makes this observable — against a {0, 0} fixture a builder that
+        // ignored the field entirely would still pass.
+        let req = request(vec![1000], 100 * SHANNONS_PER_CKB);
+        let plan = build_transfer(&req).expect("builds");
+        assert_eq!(plan.groups[0].derivation, req.derivation);
+    }
+
+    #[test]
+    fn the_built_transaction_carries_the_deps_outputs_and_out_points_it_was_asked_for() {
+        // Spec 7.2's fourth required test. Everything asserted here fails
+        // ONLY on chain: missing cell deps as `ScriptNotFound`, a wrong
+        // recipient lock as a payment that is gone. Before this test the
+        // cell-deps line could be deleted outright with the whole suite
+        // still green, which made this crate's module doc — "every decision
+        // that can be wrong is a pure function reachable from a test with no
+        // node" — untrue.
+        let req = request(vec![85, 85, 85], 150 * SHANNONS_PER_CKB);
+        let plan = build_transfer(&req).expect("builds");
+        let raw = plan.tx.raw();
+
+        let deps: Vec<PackedCellDep> = raw.cell_deps().into_iter().collect();
+        let want_deps: Vec<PackedCellDep> = req
+            .cell_deps
+            .iter()
+            .cloned()
+            .map(PackedCellDep::from)
+            .collect();
+        assert_eq!(deps, want_deps, "the lock's cell deps must reach the chain");
+
+        let outputs: Vec<_> = raw.outputs().into_iter().collect();
+        assert_eq!(outputs.len(), 2, "recipient and change");
+        assert_eq!(
+            outputs[0].lock(),
+            PackedScript::from(req.recipient.clone()),
+            "output 0 must pay the recipient, not anyone else"
+        );
+        let paid: u64 = outputs[0].capacity().unpack();
+        assert_eq!(paid, req.amount, "the recipient must receive the amount");
+        assert_eq!(
+            outputs[1].lock(),
+            PackedScript::from(req.change_lock),
+            "change must return to the change lock"
+        );
+        let returned: u64 = outputs[1].capacity().unpack();
+        assert_eq!(returned, plan.change.expect("some"));
+
+        let data: Vec<_> = raw.outputs_data().into_iter().collect();
+        assert_eq!(
+            data.len(),
+            outputs.len(),
+            "a transaction with fewer data entries than outputs is malformed"
+        );
+        assert!(data.iter().all(|d| d.raw_data().is_empty()));
+
+        let spent: Vec<_> = raw
+            .inputs()
+            .into_iter()
+            .map(|i| i.previous_output())
+            .collect();
+        let want_spent: Vec<_> = plan
+            .inputs
+            .iter()
+            .map(|c| c.out_point.clone().into())
+            .collect();
+        assert_eq!(
+            spent, want_spent,
+            "the transaction must spend the cells the plan says it does"
+        );
+    }
+
+    #[test]
+    fn inputs_appear_in_selection_order_and_groups_index_positions_not_candidates() {
+        // Every other fixture happens to select [0, 1, ..], so nothing
+        // distinguishes a position in `plan.inputs` from an index into
+        // `req.candidates`. Here the order is [1, 0]: if the group named
+        // candidate indices it would read [1, 0], and the signer would
+        // stream the witnesses in the wrong order for a digest that is only
+        // observably wrong once a node sees it — a -52.
+        let req = request(vec![50, 120], 100 * SHANNONS_PER_CKB);
+        let plan = build_transfer(&req).expect("builds");
+        assert_eq!(plan.inputs.len(), 2);
+
+        assert_eq!(
+            plan.inputs[0].out_point, req.candidates[1].out_point,
+            "largest first: candidate 1 is selected before candidate 0"
+        );
+        assert_eq!(plan.inputs[1].out_point, req.candidates[0].out_point);
+
+        assert_eq!(
+            plan.groups[0].input_indices,
+            vec![0, 1],
+            "input_indices are positions in plan.inputs, not candidate indices"
+        );
+
+        let spent: Vec<_> = plan
+            .tx
+            .raw()
+            .inputs()
+            .into_iter()
+            .map(|i| i.previous_output())
+            .collect();
+        assert_eq!(
+            spent,
+            vec![
+                req.candidates[1].out_point.clone().into(),
+                req.candidates[0].out_point.clone().into(),
+            ],
+            "the transaction's inputs must follow the same order"
+        );
+    }
+
+    #[test]
+    fn a_selection_that_lands_exactly_produces_no_change_output() {
+        // The no-change branch, otherwise unreachable from any fixture: it
+        // fires whenever a cell happens to equal amount + fee, which is rare
+        // but perfectly ordinary in production (a wallet re-spending a cell
+        // that was itself change from a similar transfer).
+        //
+        // The capacity is SOLVED rather than guessed, and it has to be:
+        // it depends on the serialised size of the very transaction the
+        // capacity goes into. That is only well defined because a
+        // CellOutput's capacity is a fixed-width u64 — the same property the
+        // fixpoint's termination rests on — so the no-change shape's size is
+        // identical for every capacity value, and one measurement settles it.
+        let amount = 100 * SHANNONS_PER_CKB;
+        let mut req = request(vec![1000], amount);
+        let exact_size = crate::size::measure(&assemble(&req, &[0], None));
+        let exact_fee = crate::fee::fee_for(exact_size, req.fee_rate);
+        req.candidates[0].capacity = amount + exact_fee;
+
+        let plan = build_transfer(&req).expect("builds");
+        assert_eq!(plan.inputs.len(), 1);
+        assert!(
+            plan.change.is_none(),
+            "an exact landing must not emit a change output, got {:?}",
+            plan.change
+        );
+        assert_eq!(plan.fee, exact_fee);
+        assert_eq!(plan.size, exact_size);
+        assert_eq!(
+            plan.tx.raw().outputs().len(),
+            1,
+            "recipient only — a zero-capacity change cell would be invalid on chain"
+        );
+        assert_eq!(plan.tx.raw().outputs_data().len(), 1);
     }
 }
