@@ -69,6 +69,62 @@ mod tests {
         assert_eq!(hex::encode(blake160(&pk)), LOCK_ARGS);
     }
 
+    // CKB testnet block 22,388,663 (0x1559fb7), tx index 1: a three-input
+    // secp256k1_blake160_sighash_all transfer, all three inputs locked to the
+    // same args (one script group). Found by walking blocks back from the
+    // tip (2026-09-12) and resolving each input's previous output.
+    const TX2_HASH: &str = "fb34f7b143c634b18da16e41947779586236ac09b8ce5c3749147e626f9a11dc";
+    const TX2_WITNESS0: &str = "5500000010000000550000005500000041000000874bd6abecfb2187b7d67dfaa02d0f7916b4529333cdb622beb2e051f6df54d2760223af63dd64cd4edb937e7390d5333f2e09e7aca59a10394f538c2f138b1600";
+    const TX2_WITNESS1: &str = "10000000100000001000000010000000";
+    const TX2_WITNESS2: &str = "10000000100000001000000010000000";
+    const TX2_LOCK_ARGS: &str = "b12e3692d401c331f6d1f1efcb24d510296c4a6a";
+
+    /// Recover the signer's `blake160` from a 65-byte recoverable signature
+    /// (`r ‖ s ‖ recid`) over `digest`. Not this crate's public surface: a
+    /// test-only oracle helper built from the crate's already-independently-
+    /// verified `sign::recover` (RFC 6979/secp256k1 round trip, `sign.rs`)
+    /// and `hash::blake160` (blake2b personalisation, `hash.rs`), so nothing
+    /// new is reimplemented here — only composed for this test's purpose.
+    fn recover_blake160(digest: &[u8; 32], signature: &[u8]) -> [u8; 20] {
+        let mut sig = [0u8; 65];
+        sig.copy_from_slice(signature);
+        let pk = recover(&sig, digest).expect("real signature recovers");
+        blake160(&pk)
+    }
+
+    #[test]
+    fn a_real_multi_input_testnet_transaction_recovers_to_its_own_lock_args() {
+        // Oracle: this transaction is committed on CKB testnet (tx
+        // TX2_HASH, block 22,388,663), so the chain accepted these
+        // signatures. If our digest is right, recovering the public key
+        // from the signature yields the blake160 all three inputs are
+        // locked to. Nothing here trusts our own signing path — sighash_all
+        // is the only piece of this crate's own code under test.
+        //
+        // The brief asked for a two-input vector; this transaction has
+        // three, all under one script group. Left as three rather than
+        // trimmed to two: it exercises the same "others" concatenation with
+        // one more witness than the minimum, which is a strict superset of
+        // the required coverage.
+        let tx_hash = h32(TX2_HASH);
+        let first_witness = hex::decode(TX2_WITNESS0).expect("hex");
+        let other_witnesses: Vec<Vec<u8>> = vec![
+            hex::decode(TX2_WITNESS1).expect("hex"),
+            hex::decode(TX2_WITNESS2).expect("hex"),
+        ];
+        let expected_lock_args = hex::decode(TX2_LOCK_ARGS).expect("hex");
+
+        assert_eq!(first_witness.len(), 85);
+        let others: Vec<&[u8]> = other_witnesses.iter().map(Vec::as_slice).collect();
+        let mut zeroed = first_witness.clone();
+        zeroed[20..85].fill(0);
+
+        let digest = sighash_all(&tx_hash, &zeroed, &others);
+        let recovered = recover_blake160(&digest, &first_witness[20..85]);
+
+        assert_eq!(recovered.to_vec(), expected_lock_args);
+    }
+
     #[test]
     fn other_witnesses_change_the_digest_and_are_order_sensitive() {
         let tx = [7u8; 32];
