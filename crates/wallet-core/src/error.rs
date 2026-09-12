@@ -48,19 +48,29 @@ pub enum CoreError {
     #[error("wallet is on {wallet:?} but the backend is on {backend:?}")]
     BackendNetworkMismatch { wallet: Network, backend: Network },
 
-    /// The active backend is attached and answering, but its index cannot be
-    /// trusted to be complete yet.
+    /// The active backend is not in a state where a cell scan means anything:
+    /// it is not connected, not yet started, reporting an error, or — for a
+    /// light client — has been asked to watch no scripts at all.
     ///
-    /// [`BackendStatus::is_usable`] is the predicate, documented as "queries
-    /// can be trusted to return complete results". Spending through a backend
-    /// that fails it is not a degraded read, it is a wrong one: a light
-    /// client still fetching filters serves a partial cell set, so a funded
-    /// wallet reports no spendable cells or insufficient funds, and a lagging
-    /// index can serve a cell that has already been spent — which builds and
-    /// signs cleanly and is refused by the pool.
+    /// [`BackendStatus::is_usable`] is the predicate. It is `Synced |
+    /// Syncing`, so this variant is produced for `Connecting`, `Error` and
+    /// `Stopped` and for nothing else. The case that earns it is a light
+    /// client with an empty registration list: it indexes nothing for this
+    /// wallet, so `get_cells` returns nothing however funded the wallet is,
+    /// and every caller downstream would report no spendable cells. Plan 1d's
+    /// supervised-restart bug, where a rebuilt client loses its
+    /// registrations, arrives the same way.
+    ///
+    /// **What this does not promise.** A *registered* light client that is
+    /// still fetching filters reports `Syncing`, which is usable, so it does
+    /// not raise this error even though its candidate set really is partial —
+    /// an incomplete index is not caught here. `is_usable` admitting
+    /// `Syncing` is plan 1d's design, not this variant's; whether the send
+    /// path should demand `Synced` outright is a plan 1f decision.
     #[error(
-        "the backend reports {status:?} and its cell scan may be incomplete; \
-         wait until it reports syncing or synced before sending"
+        "the backend reports {status:?}, so a cell scan would return nothing \
+         regardless of this wallet's balance; wait until it is connected and \
+         reporting sync progress, and check its scripts are registered"
     )]
     BackendNotUsable { status: BackendStatus },
 

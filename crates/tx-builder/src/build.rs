@@ -407,10 +407,17 @@ mod tests {
         // with no call back into `fee_for`. Comparing `plan.fee` against
         // `fee_for(plan.size, rate)` is `x >= x` with respect to rounding
         // direction — `plan.fee` IS that call's result — so it cannot detect
-        // a `fee_for` that floors instead of rounding up, which is the exact
-        // bug this assertion exists to catch. Same ruling as the integration
-        // test in `tests/fee_properties.rs`, applied to its sibling here.
-        let req = request(vec![1000], 100 * SHANNONS_PER_CKB);
+        // a `fee_for` that floors instead of rounding up. Same ruling as the
+        // integration test in `tests/fee_properties.rs`, applied here.
+        //
+        // The rate is 1200, not the fixture's `DEFAULT_FEE_RATE` of 1000, and
+        // that is the whole reason the oracle is worth having. At rate 1000
+        // the fee is `size * 1000 / 1000` — exact for every size, so
+        // `div_ceil` and truncating division agree and NOTHING can
+        // distinguish them. A rounding-direction bug is only observable at a
+        // rate whose division leaves a remainder.
+        let mut req = request(vec![1000], 100 * SHANNONS_PER_CKB);
+        req.fee_rate = 1200;
         let plan = build_transfer(&req).expect("builds");
         let fee = u128::from(plan.fee);
         let size = plan.size as u128;

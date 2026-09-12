@@ -39,20 +39,35 @@ fn gate() -> Gate {
     if std::env::var("LANTERN_LIVE_TESTNET").as_deref() != Ok("1") {
         return Gate::Skipped;
     }
-    // Matched, not `.expect()`ed. `VarError::NotUnicode(OsString)`'s `Debug`
-    // embeds the variable's CONTENTS, and `expect` formats the error with
-    // `{:?}` — so a mnemonic that was not valid UTF-8 would be printed in the
-    // panic message and captured in whatever ran the test. Unreachable for a
-    // well-formed BIP-39 phrase, but "no secret material in any Display or
-    // Debug" is a categorical rule, and this file's module doc promises
-    // nothing here ever formats the phrase. The panic names the variable and
-    // nothing else.
-    let Ok(phrase) = std::env::var("LANTERN_LIVE_MNEMONIC") else {
-        panic!(
-            "LANTERN_LIVE_TESTNET=1 was set but LANTERN_LIVE_MNEMONIC was not readable as \
-             a UTF-8 string — half-configured environment refused rather than silently \
-             skipped (the variable's value is deliberately not shown)"
-        )
+    // Matched, not `.expect()`ed, and matched per variant.
+    //
+    // `.expect()` is wrong because `VarError::NotUnicode(OsString)`'s `Debug`
+    // embeds the variable's CONTENTS and `expect` formats the error with
+    // `{:?}`, so a mnemonic that was not valid UTF-8 would be printed in the
+    // panic message and captured by whatever ran the test. Unreachable for a
+    // well-formed BIP-39 phrase, but "no secret material in any `Display` or
+    // `Debug`" is categorical and this file's module doc promises nothing
+    // here ever formats the phrase.
+    //
+    // Per variant because the two failures need different advice, and the
+    // overwhelmingly likely one is simply that the variable is unset —
+    // telling that user their phrase "was not readable as UTF-8" sends them
+    // to inspect a value that does not exist. Neither arm binds the
+    // `OsString`: `NotUnicode(_)` discards it, so there is nothing in scope
+    // to format even by accident.
+    let phrase = match std::env::var("LANTERN_LIVE_MNEMONIC") {
+        Ok(phrase) => phrase,
+        Err(std::env::VarError::NotPresent) => panic!(
+            "LANTERN_LIVE_TESTNET=1 was set but LANTERN_LIVE_MNEMONIC was not set — a \
+             half-configured environment is refused rather than silently skipped. Set \
+             LANTERN_LIVE_MNEMONIC to a funded testnet phrase, or unset \
+             LANTERN_LIVE_TESTNET to skip this test."
+        ),
+        Err(std::env::VarError::NotUnicode(_)) => panic!(
+            "LANTERN_LIVE_MNEMONIC is set but its value is not valid UTF-8, so it cannot \
+             be a BIP-39 phrase. Re-export it as plain ASCII words. (The value is \
+             deliberately not shown: it may be secret material.)"
+        ),
     };
     Gate::Enabled(phrase)
 }

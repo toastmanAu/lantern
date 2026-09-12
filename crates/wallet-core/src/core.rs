@@ -377,14 +377,30 @@ impl WalletCore {
         let change_lock = lock_script_for(&account, module)?;
 
         // `current_backend()` hands back whatever is active, not whatever is
-        // ready. A backend that fails `is_usable()` — a light client still
-        // fetching filters, a supervised client that has not finished coming
-        // up, one reporting an error — still answers `get_cells`, just from
-        // an incomplete index. Everything downstream then behaves exactly as
-        // if the wallet were empty or short of funds, which is a lie told
-        // confidently; worse, a lagging index can serve a cell that is
-        // already spent, and that transaction builds, signs and is refused
-        // only by the pool. Spec §8 names this gate.
+        // ready, so ask. Be precise about what this catches, because it is
+        // narrower than "the index is complete":
+        //
+        // `is_usable()` is `Synced | Syncing`, so what it REFUSES is
+        // `Connecting`, `Error` and `Stopped` — a backend that is not
+        // reachable yet, one whose last probe failed, one that has been shut
+        // down, and (for a light client, whose `Connecting` means
+        // `filter_progress()` returned `None`) one that has been asked to
+        // watch nothing at all. That last case is the one worth having: a
+        // light client with no registered scripts indexes nothing for us, so
+        // `get_cells` is guaranteed to answer nothing however funded the
+        // wallet is, and everything downstream would report no spendable
+        // cells — a lie told confidently. Plan 1d's supervised-restart bug,
+        // where a rebuilt `EmbeddedLight` loses its registration list, lands
+        // here too (spec §8 predicted it).
+        //
+        // What it does NOT catch: a REGISTERED light client that is still
+        // fetching filters reports `Syncing` and passes. Its candidate set is
+        // genuinely partial, so `InsufficientFunds` over a funded wallet
+        // remains reachable, as does a lagging index serving a cell that is
+        // already spent. `is_usable()` admitting `Syncing` is plan 1d's
+        // design (`sdk-schema/src/backend.rs`), not something this call site
+        // decides; narrowing the send path to `Synced` alone is a plan 1f
+        // decision and a behavioural change, not a comment.
         let status = backend.status().await;
         if !status.is_usable() {
             return Err(CoreError::BackendNotUsable { status });
