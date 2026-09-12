@@ -64,13 +64,19 @@ pub struct SearchKey {
 
 impl SearchKey {
     /// Search by lock script, the common case for a wallet.
+    ///
+    /// `with_data` is asked for explicitly, matching
+    /// [`crate::query::CellQuery::search_key`]. A caller cannot distinguish
+    /// "this cell holds no data" from "the node did not send any" once
+    /// [`IndexerCell::output_data`] comes back `None`, so leaving it to a
+    /// server default is a latent footgun in either constructor.
     pub const fn lock(script: Script) -> Self {
         Self {
             script,
             script_type: ScriptType::Lock,
             script_search_mode: None,
             filter: None,
-            with_data: None,
+            with_data: Some(true),
             group_by_transaction: None,
         }
     }
@@ -172,11 +178,17 @@ mod tests {
             json["script"]["args"],
             "0x72f72b0cafd31de5072b10e84fc6c9d7d7596db7"
         );
-        // Optional fields must be omitted, not sent as null: a node rejects
-        // `script_search_mode: null`.
+        // Optional fields that are genuinely unset must be omitted, not sent
+        // as null: a node rejects `script_search_mode: null`.
         assert!(json.get("filter").is_none(), "{json}");
         assert!(json.get("script_search_mode").is_none(), "{json}");
-        assert!(json.get("with_data").is_none(), "{json}");
+        // `with_data` is the exception, and deliberately so: it is sent as a
+        // real value. Omitting it leaves the node's own default deciding
+        // whether `output_data` comes back at all, and a consumer cannot tell
+        // an absent field from a confirmed-empty one — which is how a cell
+        // carrying token data gets mistaken for plain capacity. `true`, not
+        // `null`, so the null-rejection rule above is not violated.
+        assert_eq!(json["with_data"], true, "{json}");
     }
 
     #[test]

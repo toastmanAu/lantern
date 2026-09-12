@@ -715,6 +715,69 @@ async fn a_cell_carrying_a_type_script_or_data_is_never_spent_as_plain_capacity(
 }
 
 #[tokio::test]
+async fn a_cell_whose_data_the_node_did_not_report_is_not_treated_as_empty() {
+    // `IndexerCell.output_data` is an `Option`. A reply that omits the field —
+    // or sends JSON `null` — carries no evidence that the cell is empty; it
+    // says the node did not tell us. Treating that as "no data" accepts
+    // exactly the token cells the filter above exists to reject, and the
+    // divergence surfaces only as an on-chain lock error, because the signer
+    // is handed input contents that do not match the cell being spent.
+    //
+    // The query now asks for the data explicitly, so this state should not
+    // arise — but "should not arise" is a server-side default, not a
+    // guarantee, and every other fixture in this file spells `"output_data":
+    // "0x"` out, so nothing else covers it.
+    let dir = tempdir().expect("tempdir");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let account = core.create_account("Main").await.expect("account");
+    let args = hex_args(&lock_args_of(&account));
+
+    // Otherwise perfectly spendable: this account's exact lock, no type
+    // script, ample capacity. The absent data field is the only difference
+    // from the cell that funds every other test here.
+    let mut omitted = cell_json(&args, 1000 * SHANNONS_PER_CKB, 0xd1, 0);
+    omitted
+        .as_object_mut()
+        .expect("object")
+        .remove("output_data");
+    let mut null_data = cell_json(&args, 1000 * SHANNONS_PER_CKB, 0xd2, 0);
+    null_data["output_data"] = serde_json::Value::Null;
+
+    let node = FakeNode::builder()
+        .respond("local_node_info", local_node_info_json())
+        .respond("get_tip_header", header_json("0x1554ef4"))
+        .respond("get_cells", cells_page(&[omitted, null_data], "0x"))
+        .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
+        .start()
+        .await;
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+
+    let err = core
+        .send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
+        .await
+        .expect_err("a cell whose contents are unknown is not plain capacity");
+    assert!(
+        matches!(
+            err,
+            CoreError::Build(lantern_tx_builder::BuildError::NoSpendableCells)
+        ),
+        "{err:?}"
+    );
+    assert_eq!(
+        node.call_count("send_transaction"),
+        0,
+        "nothing may reach the wire"
+    );
+}
+
+#[tokio::test]
 async fn a_new_account_records_a_start_height_now_rather_than_deferring_it() {
     // An imported wallet may have arbitrary history: genesis, always.
     let imported_dir = tempdir().expect("tempdir");

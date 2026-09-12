@@ -556,6 +556,14 @@ fn decode_address(recipient: &str, network: Network) -> Result<Script, CoreError
 ///   and re-issues none. sUDT permits burning, so that is silent loss rather
 ///   than a rejection.
 ///
+/// The data filter fails **closed**: `IndexerCell::output_data` is an
+/// `Option`, and an absent field is not evidence of an empty cell — it means
+/// the node did not send the data, which is indistinguishable from a cell
+/// holding a token balance. Treating `None` as empty would accept exactly the
+/// cells this filter exists to reject. The query asks for the data explicitly
+/// ([`CellQuery::search_key`]), so `None` is already exceptional; excluding it
+/// here means no caller depends on that request having been honoured.
+///
 /// The cursor is never persisted and never re-derived: an exhausted CKB scan
 /// answers `last_cursor: "0x"`, and a later `get_cells` with `after: "0x"`
 /// returns nothing forever. [`Cursor`] cannot represent that value, and this
@@ -572,10 +580,12 @@ async fn collect_candidates(
         let page = backend.get_cells(&query, cursor.as_ref()).await?;
         let next = page.next().cloned();
         for cell in page.into_cells() {
-            let data = cell
-                .output_data
-                .map(|d| d.as_bytes().to_vec())
-                .unwrap_or_default();
+            // No `unwrap_or_default()`: absent data is unknown data, not empty
+            // data, and only a cell whose contents the node actually reported
+            // can be called plain capacity.
+            let Some(data) = cell.output_data.map(|d| d.as_bytes().to_vec()) else {
+                continue;
+            };
             if cell.output.lock != *lock || cell.output.type_.is_some() || !data.is_empty() {
                 continue;
             }

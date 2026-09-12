@@ -37,13 +37,23 @@ impl CellQuery {
     }
 
     /// The wire form of this query's key.
+    ///
+    /// `with_data` is sent explicitly rather than left to the node's default.
+    /// `IndexerCell.output_data` is an `Option`, and a caller cannot tell
+    /// "this cell holds no data" from "the node did not send any" — so a
+    /// consumer deciding whether a cell is plain capacity would be relying on
+    /// an unstated server-side default to be safe. Asking for the data makes
+    /// the `None` case genuinely exceptional rather than routine.
+    ///
+    /// A real value, not `null`: the other optional fields stay omitted
+    /// because a node rejects them as explicit nulls.
     pub fn search_key(&self) -> SearchKey {
         SearchKey {
             script: self.script.clone(),
             script_type: self.script_type,
             script_search_mode: None,
             filter: None,
-            with_data: None,
+            with_data: Some(true),
             group_by_transaction: None,
         }
     }
@@ -106,6 +116,22 @@ mod tests {
         assert_eq!(q.script_type, ScriptType::Lock);
         assert_eq!(q.order, Order::Asc);
         assert_eq!(q.limit, 100);
+    }
+
+    #[test]
+    fn a_query_asks_for_cell_data_rather_than_trusting_a_server_default() {
+        // This is the shape that actually goes on the wire — `light.rs` and
+        // `full.rs` both send `query.search_key()`. `IndexerCell.output_data`
+        // is an `Option`, so a consumer that treats `None` as "no data"
+        // cannot distinguish a cell holding nothing from one whose data the
+        // node simply did not send: a token cell then reads as plain
+        // capacity. Asking explicitly is what makes `None` exceptional.
+        let json = serde_json::to_value(CellQuery::lock(script()).search_key()).expect("ser");
+        assert_eq!(json["with_data"], true, "{json}");
+        // ...and only that one: the rest stay omitted, because a node rejects
+        // an explicit `script_search_mode: null`.
+        assert!(json.get("filter").is_none(), "{json}");
+        assert!(json.get("script_search_mode").is_none(), "{json}");
     }
 
     #[test]
