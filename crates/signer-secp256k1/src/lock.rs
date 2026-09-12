@@ -27,6 +27,9 @@ pub const HASH_TYPE_TYPE: u8 = 0x01;
 
 const BIP39_SEED_LEN: usize = 64;
 
+/// A recoverable secp256k1 signature: r (32), s (32), recovery id (1).
+const SIGNATURE_LEN: usize = 65;
+
 /// The first-party secp256k1 lock module. Carries no state.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Secp256k1Lock;
@@ -75,7 +78,7 @@ impl LockModule for Secp256k1Lock {
         // RFC 0019: a recoverable signature is 65 bytes — r (32), s (32),
         // recovery id (1). Fixed, so fee estimation is exact rather than
         // conservative.
-        WitnessSize::Fixed(65)
+        WitnessSize::Fixed(SIGNATURE_LEN)
     }
 
     fn derive_lock_args(&self, seed: &[u8], derivation: &Derivation) -> Result<Vec<u8>, LockError> {
@@ -117,6 +120,30 @@ impl LockModule for Secp256k1Lock {
                 )));
             }
 
+            // The signed bytes and the broadcast bytes must be the same
+            // witness, differing in the lock field alone: on chain the lock
+            // re-derives this digest from the BROADCAST witness with its lock
+            // field zeroed. Emitting a witness rebuilt from this slot's own
+            // `WitnessArgs` makes that true by construction for any shape the
+            // builder chooses — an `input_type` field it carries is carried
+            // through rather than dropped.
+            let placeholder = WitnessArgs::from_slice(&witnesses[first]).map_err(|_| {
+                LockError::Signing(format!("witness slot {first} is not a WitnessArgs"))
+            })?;
+
+            // ...and the slot must already be this module's placeholder, with
+            // its lock zeroed to the signature's own length. Rebuilding from
+            // the slot cannot fix a slot that is the wrong shape to begin
+            // with: a lock of the wrong length, or one the builder never
+            // zeroed, leaves the on-chain zeroing reproducing different bytes
+            // from the ones hashed here. Checked before the seed is touched.
+            if witness_with_lock(&placeholder, &[0u8; SIGNATURE_LEN]) != witnesses[first] {
+                return Err(LockError::Signing(format!(
+                    "witness slot {first} is not this module's placeholder: its lock field \
+                     must be {SIGNATURE_LEN} zero bytes"
+                )));
+            }
+
             // RFC 0019: the rest of the group, then every witness beyond the
             // input count. Both parts are length-prefixed into the digest, so
             // a missing slot shifts every byte after it — which is invisible
@@ -143,7 +170,7 @@ impl LockModule for Secp256k1Lock {
 
             signed.push(SignedWitness {
                 index: first,
-                witness: witness_with_lock(&signature),
+                witness: witness_with_lock(&placeholder, &signature),
             });
         }
         Ok(signed)
@@ -173,14 +200,21 @@ fn witness_bytes(tx: &Transaction) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// A `WitnessArgs` carrying `signature` in its lock field and nothing else:
-/// byte-for-byte the placeholder this module's [`LockModule::witness_size`]
-/// asked the builder to measure, with the zeroes replaced by the signature.
-fn witness_with_lock(signature: &[u8]) -> Vec<u8> {
+/// `placeholder` with `signature` in its lock field and every other field
+/// left exactly as it was.
+///
+/// Building from the placeholder rather than from scratch is what makes the
+/// broadcast witness and the signed bytes differ in the lock field and nowhere
+/// else. Rebuilt from scratch, a placeholder carrying an `input_type` would be
+/// hashed with that field and broadcast without it — a signature that is
+/// confidently wrong, and only says so as an on-chain -52.
+fn witness_with_lock(placeholder: &WitnessArgs, signature: &[u8]) -> Vec<u8> {
     let lock = Bytes::new_builder()
         .set(signature.iter().copied().map(Byte::new).collect())
         .build();
-    WitnessArgs::new_builder()
+    placeholder
+        .clone()
+        .as_builder()
         .lock(BytesOpt::new_builder().set(Some(lock)).build())
         .build()
         .as_bytes()
@@ -217,7 +251,8 @@ impl Secp256k1Lock {
 #[cfg(test)]
 mod tests {
     use ckb_types::packed::{
-        BytesVec, CellInput, CellInputVec, OutPoint, RawTransaction, Transaction,
+        Byte, Bytes, BytesOpt, BytesVec, CellInput, CellInputVec, OutPoint, RawTransaction,
+        Transaction, WitnessArgs,
     };
     use ckb_types::prelude::*;
     use lantern_sdk_schema::{
@@ -226,7 +261,10 @@ mod tests {
     };
     use lantern_tx_builder::{EMPTY_WITNESS, placeholder_witness};
 
-    use super::{HASH_TYPE_TYPE, SECP256K1_BLAKE160_CODE_HASH, Secp256k1Lock, transaction_hash};
+    use super::{
+        HASH_TYPE_TYPE, SECP256K1_BLAKE160_CODE_HASH, SIGNATURE_LEN, Secp256k1Lock,
+        transaction_hash,
+    };
     use crate::hash::blake160;
     use crate::key::{SigningKey, public_key};
     use crate::sighash::sighash_all;
@@ -511,6 +549,141 @@ mod tests {
                     .expect("derives"),
                 "group at slot {} signed the wrong digest or used the wrong key",
                 out.index
+            );
+        }
+    }
+
+    /// A serialised `WitnessArgs` with the given lock field, and optionally an
+    /// `input_type` alongside it.
+    fn witness_args(lock: &[u8], input_type: Option<&[u8]>) -> Vec<u8> {
+        let field = |b: &[u8]| {
+            BytesOpt::new_builder()
+                .set(Some(
+                    Bytes::new_builder()
+                        .set(b.iter().copied().map(Byte::new).collect())
+                        .build(),
+                ))
+                .build()
+        };
+        let mut args = WitnessArgs::new_builder().lock(field(lock));
+        if let Some(t) = input_type {
+            args = args.input_type(field(t));
+        }
+        args.build().as_bytes().to_vec()
+    }
+
+    /// What the on-chain lock does before re-deriving the digest: replace the
+    /// broadcast witness's lock field with zeroes of the same length.
+    fn zero_lock(witness: &[u8]) -> Vec<u8> {
+        let args = WitnessArgs::from_slice(witness).expect("WitnessArgs");
+        let len = args.lock().to_opt().expect("a lock field").raw_data().len();
+        witness_args(&vec![0u8; len], None)
+    }
+
+    #[tokio::test]
+    async fn the_broadcast_witness_differs_from_the_signed_bytes_in_the_lock_alone() {
+        // The property the whole scheme rests on. The lock script re-derives
+        // this digest from the BROADCAST witness with its lock field zeroed,
+        // so that must reproduce the bytes hashed here — byte for byte, every
+        // field. A placeholder carrying an `input_type` is the case an
+        // emitter that rebuilds from scratch silently gets wrong.
+        let seed = [7u8; 64];
+        let slot = witness_args(&[0u8; SIGNATURE_LEN], None);
+        assert_eq!(
+            slot,
+            placeholder_witness(WitnessSize::Fixed(SIGNATURE_LEN)),
+            "this test's own witness builder must agree with the real one"
+        );
+
+        let req = request(
+            tx_with(2, &[&slot, EMPTY_WITNESS]),
+            vec![group(vec![0, 1], d(0, 0))],
+        );
+        let out = Secp256k1Lock.sign(&seed, &req).await.expect("signs");
+
+        assert_eq!(
+            zero_lock(&out[0].witness),
+            slot,
+            "zeroing the broadcast witness's lock must reproduce the signed bytes"
+        );
+        let pk = recover(
+            &signature_in(&out[0].witness),
+            &sighash_all(&tx_hash_of(&req.tx), &slot, &[EMPTY_WITNESS]),
+        )
+        .expect("recovers");
+        assert_eq!(
+            blake160(&pk).to_vec(),
+            Secp256k1Lock
+                .derive_lock_args(&seed, &d(0, 0))
+                .expect("derives")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_placeholder_field_beside_the_lock_is_carried_through() {
+        // Same property, with a placeholder this module did not choose the
+        // shape of. Rebuilding the witness from scratch would drop the
+        // `input_type` that was hashed, and only say so as an on-chain -52.
+        let slot = witness_args(&[0u8; SIGNATURE_LEN], Some(&[0xEE; 4]));
+        let req = request(
+            tx_with(2, &[&slot, EMPTY_WITNESS]),
+            vec![group(vec![0, 1], d(0, 0))],
+        );
+
+        let out = Secp256k1Lock.sign(&[7u8; 64], &req).await.expect("signs");
+
+        let broadcast = WitnessArgs::from_slice(&out[0].witness).expect("WitnessArgs");
+        assert_eq!(
+            broadcast
+                .input_type()
+                .to_opt()
+                .expect("input_type survives")
+                .raw_data()
+                .to_vec(),
+            vec![0xEEu8; 4]
+        );
+        assert_eq!(
+            zero_lock(&out[0].witness),
+            witness_args(&[0u8; SIGNATURE_LEN], None)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_first_slot_that_is_not_a_witness_args_is_refused() {
+        // A padding bug in the builder that leaves the group's first slot
+        // empty would otherwise take the digest over ZERO BYTES, broadcast an
+        // 85-byte witness, and produce a signature that is confidently wrong.
+        let req = request(
+            tx_with(2, &[EMPTY_WITNESS, EMPTY_WITNESS]),
+            vec![group(vec![0, 1], d(0, 0))],
+        );
+        assert_eq!(
+            Secp256k1Lock.sign(&[7u8; 64], &req).await.unwrap_err(),
+            LockError::Signing("witness slot 0 is not a WitnessArgs".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_first_slot_that_is_not_this_modules_placeholder_is_refused() {
+        // Both parse as a `WitnessArgs`, so rebuilding from the slot cannot
+        // save either: a lock of the wrong length, and a lock the builder
+        // never zeroed. In both, the on-chain zeroing yields different bytes
+        // from the ones hashed.
+        for slot in [
+            placeholder_witness(WitnessSize::Fixed(100)),
+            witness_args(&[0x01; SIGNATURE_LEN], None),
+        ] {
+            let req = request(
+                tx_with(2, &[&slot, EMPTY_WITNESS]),
+                vec![group(vec![0, 1], d(0, 0))],
+            );
+            assert_eq!(
+                Secp256k1Lock.sign(&[7u8; 64], &req).await.unwrap_err(),
+                LockError::Signing(
+                    "witness slot 0 is not this module's placeholder: its lock field must be \
+                     65 zero bytes"
+                        .to_string()
+                )
             );
         }
     }
