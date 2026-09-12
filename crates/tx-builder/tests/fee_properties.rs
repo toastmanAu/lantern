@@ -1,19 +1,28 @@
 //! The one invariant that must hold for every transfer this builder makes.
 //!
 //! Fee under-payment is the single most repeated failure in this project's
-//! recorded history — across `JoyID`, CCC, and an sUDT builder. `fee_for`
-//! rounds UP via `div_ceil`; rounding down instead is a one-shannon error
-//! that only appears when `size * rate` is not an exact multiple of 1000.
-//! Hand-picked example sizes can land on clean multiples and prove nothing
-//! about direction — a randomised property is what this task exists to add
-//! on top of Task 12's example tests.
+//! recorded history — across `JoyID`, CCC, and an sUDT builder. Rounding
+//! down instead of up is a one-shannon error that only appears when
+//! `size * rate` is not an exact multiple of 1000. Hand-picked example
+//! sizes can land on clean multiples and prove nothing about direction — a
+//! randomised property is what this task exists to add on top of Task 12's
+//! example tests.
+//!
+//! The fee assertion below computes its expected minimum directly, in
+//! `u128`, rather than calling `fee_for`. A first version of this test
+//! compared `plan.fee` against `fee_for(plan.size, req.fee_rate)` — the
+//! very function `build_transfer` uses internally to compute `plan.fee` —
+//! which made the assertion a tautology: whichever way `fee_for` rounds,
+//! both sides of the comparison move together, so a broken `fee_for` could
+//! never be caught. Spec §7.2 requires the fee never fall below
+//! `measured_size × rate`, an INDEPENDENT computation of that product; this
+//! is that computation, with no reference to the function under test on
+//! either side.
 
 use ckb_jsonrpc_types::{CellDep, DepType, JsonBytes, OutPoint, Script, ScriptHashType};
 use ckb_types::H256;
 use lantern_sdk_schema::{Derivation, InputContext, WitnessSize};
-use lantern_tx_builder::{
-    BuildError, SHANNONS_PER_CKB, TransferRequest, build_transfer, fee_for, measure,
-};
+use lantern_tx_builder::{BuildError, SHANNONS_PER_CKB, TransferRequest, build_transfer, measure};
 
 /// A secp-shaped lock: 20-byte args, so `min_capacity` is 61 CKB.
 fn script(fill: u8) -> Script {
@@ -105,8 +114,14 @@ fn the_fee_never_under_pays_for_the_measured_size() {
         match build_transfer(&req) {
             Ok(plan) => {
                 built += 1;
+                // The mathematical statement of "the fee covers
+                // size * rate / 1000", multiplied out to avoid rounding on
+                // either side and independent of `fee_for` entirely.
+                let fee = u128::from(plan.fee);
+                let size = plan.size as u128;
+                let rate = u128::from(req.fee_rate);
                 assert!(
-                    plan.fee >= fee_for(plan.size, req.fee_rate),
+                    fee * 1000 >= size * rate,
                     "case {case}: fee {} under-pays for {} bytes at rate {}",
                     plan.fee,
                     plan.size,
