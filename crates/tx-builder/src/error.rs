@@ -30,6 +30,19 @@ pub enum BuildError {
 
     #[error("no spendable cells")]
     NoSpendableCells,
+
+    /// The candidates are not all under one lock script.
+    ///
+    /// A transfer builds exactly one script group and claims every input for
+    /// it, so a second lock among the candidates would be signed by the first
+    /// lock's key: on chain that is a `-52`, and there is nothing local to
+    /// catch it afterwards. Named as a candidate index because that is the
+    /// row a caller has to go and look at.
+    #[error(
+        "candidate {index} is locked by a different script from candidate 0; \
+         a transfer signs one script group and cannot mix locks"
+    )]
+    MixedLocks { index: usize },
 }
 
 #[cfg(test)]
@@ -87,6 +100,19 @@ mod tests {
         let text = e.to_string();
         assert!(text.contains("600000"), "size must be stated: {text}");
         assert!(text.contains("512000"), "limit must be stated: {text}");
+    }
+
+    #[test]
+    fn mixed_locks_names_the_candidate_a_caller_has_to_look_at() {
+        let text = BuildError::MixedLocks { index: 3 }.to_string();
+        assert!(
+            text.contains('3'),
+            "the offending index must be stated: {text}"
+        );
+        assert!(
+            !text.to_lowercase().contains("insufficient"),
+            "this is a caller bug, not a funding problem: {text}"
+        );
     }
 
     #[test]

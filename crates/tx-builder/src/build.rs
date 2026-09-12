@@ -41,8 +41,24 @@ pub fn build_transfer(req: &TransferRequest) -> Result<TransferPlan, BuildError>
             floor: recipient_floor,
         });
     }
-    if req.candidates.is_empty() {
+    let Some(first) = req.candidates.first() else {
         return Err(BuildError::NoSpendableCells);
+    };
+    // One script group over every input is a PRECONDITION, not an observation:
+    // `finish` reads the group's `lock_hash` off the first input and claims
+    // all of them for it. `wallet-core` filters its candidates to one exact
+    // lock, so today's only caller cannot violate this — but `build_transfer`
+    // is public API, plan 1f adds callers, and the failure is a `-52` at a
+    // node with nothing local to notice. Checked over every candidate rather
+    // than over the selected subset, so the answer does not depend on how
+    // much is being sent.
+    if let Some((index, _)) = req
+        .candidates
+        .iter()
+        .enumerate()
+        .find(|(_, c)| c.lock != first.lock)
+    {
+        return Err(BuildError::MixedLocks { index });
     }
     let change_floor = min_capacity(&req.change_lock, None, 0);
 
@@ -337,6 +353,27 @@ mod tests {
                 assert!(shortfall > 0);
             }
             other => panic!("expected InsufficientFunds, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn candidates_under_two_different_locks_are_refused_before_anything_is_built() {
+        // `finish` takes the group's `lock_hash` from the first input and
+        // claims every input for it. A second lock among the candidates
+        // therefore gets signed by the first lock's key — a `-52` on chain,
+        // with nothing local to catch it. `wallet-core` filters to one exact
+        // lock, so this guard protects the NEXT caller, not the current one.
+        //
+        // The second cell is large enough to be selected on its own, so a
+        // build without the guard would happily reach `finish` rather than
+        // stopping for an unrelated reason.
+        let mut req = request(vec![1000, 1000], 100 * SHANNONS_PER_CKB);
+        req.candidates[1].lock = script(0xcc);
+        match build_transfer(&req) {
+            // The index, not merely the variant: it must name the row that
+            // differs, which is the only thing a caller can act on.
+            Err(BuildError::MixedLocks { index }) => assert_eq!(index, 1),
+            other => panic!("expected MixedLocks, got {other:?}"),
         }
     }
 
