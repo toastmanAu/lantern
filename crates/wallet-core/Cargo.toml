@@ -17,6 +17,10 @@ lantern-vault = { path = "../vault" }
 lantern-account-registry = { path = "../account-registry" }
 lantern-signer-secp256k1 = { path = "../signer-secp256k1" }
 lantern-chain-backend = { path = "../chain-backend" }
+lantern-tx-builder = { path = "../tx-builder" }
+# `send` splices signed witnesses back into the molecule transaction the
+# builder produced, so this crate handles `packed::Transaction` directly.
+ckb-types.workspace = true
 bip39.workspace = true
 pbkdf2.workspace = true
 sha2.workspace = true
@@ -28,7 +32,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
-ckb-types.workspace = true
 tempfile = "3.10"
 hex.workspace = true
 serde_json.workspace = true

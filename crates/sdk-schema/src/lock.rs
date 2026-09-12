@@ -4,9 +4,14 @@
 
 use async_trait::async_trait;
 
+// Re-exported: `cell_deps` names it in the trait's own signature, so every
+// implementor needs the type and should not have to depend on
+// `ckb-jsonrpc-types` directly to get it.
+pub use ckb_jsonrpc_types::CellDep;
+
 use crate::error::LockError;
 use crate::signing::{SignedWitness, SigningRequest};
-use crate::types::{AccountCapabilities, Derivation, LockType};
+use crate::types::{AccountCapabilities, Derivation, LockType, Network};
 
 /// The script a lock module's accounts are locked by. `hash_type` follows
 /// the CKB `ScriptHashType` encoding (`0x00` data, `0x01` type, `0x02`
@@ -64,6 +69,16 @@ pub trait LockModule: Send + Sync {
     fn seed_kind(&self) -> SeedKind;
     /// Size of the witness lock placeholder for fee estimation.
     fn witness_size(&self) -> WitnessSize;
+
+    /// The cell deps this module's lock script needs on `network`.
+    ///
+    /// Per network, because a system script's dep group lives at a different
+    /// out point on each chain — one chain's does not exist on the other.
+    /// Omitting these, or carrying the wrong chain's, fails **only** on chain,
+    /// as `ScriptNotFound`: the transaction builds, signs and serialises
+    /// perfectly without them.
+    fn cell_deps(&self, network: Network) -> Vec<CellDep>;
+
     fn derive_lock_args(&self, seed: &[u8], derivation: &Derivation) -> Result<Vec<u8>, LockError>;
 
     /// Produce witnesses for the groups in `req`.
@@ -87,10 +102,10 @@ pub trait LockModule: Send + Sync {
 mod tests {
     use async_trait::async_trait;
 
-    use super::{LockModule, ScriptTemplate, SeedKind, WitnessSize};
+    use super::{CellDep, LockModule, ScriptTemplate, SeedKind, WitnessSize};
     use crate::error::LockError;
     use crate::signing::{SignedWitness, SigningGroup, SigningRequest};
-    use crate::types::{AccountCapabilities, Derivation, LockType};
+    use crate::types::{AccountCapabilities, Derivation, LockType, Network};
 
     struct Fake;
 
@@ -119,6 +134,9 @@ mod tests {
         }
         fn witness_size(&self) -> WitnessSize {
             WitnessSize::Fixed(1)
+        }
+        fn cell_deps(&self, _: Network) -> Vec<CellDep> {
+            Vec::new()
         }
         fn derive_lock_args(&self, seed: &[u8], _: &Derivation) -> Result<Vec<u8>, LockError> {
             Ok(seed.to_vec())

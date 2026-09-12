@@ -19,6 +19,10 @@ async-trait.workspace = true
 # so this crate needs the packed types. Already in the graph via
 # `lantern-sdk-schema`, whose `SigningRequest` carries a `packed::Transaction`.
 ckb-types.workspace = true
+# The lock's cell deps are part of the module's public description and are
+# handed straight to the transaction builder, which names them in the
+# JSON-RPC shape.
+ckb-jsonrpc-types.workspace = true
 secp256k1.workspace = true
 hmac.workspace = true
 sha2.workspace = true

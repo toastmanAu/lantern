@@ -2371,6 +2371,7 @@ version = "0.0.3"
 dependencies = [
  "async-trait",
  "ckb-hash",
+ "ckb-jsonrpc-types",
  "ckb-types",
  "hex",
  "hmac",
@@ -2427,6 +2428,7 @@ dependencies = [
  "lantern-chain-backend",
  "lantern-sdk-schema",
  "lantern-signer-secp256k1",
+ "lantern-tx-builder",
  "lantern-vault",
  "pbkdf2",
  "rand 0.8.5",

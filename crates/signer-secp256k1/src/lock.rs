@@ -1,11 +1,13 @@
 //! `LockModule` implementation for `secp256k1_blake160_sighash_all`.
 
 use async_trait::async_trait;
+use ckb_jsonrpc_types::{CellDep, DepType, OutPoint};
+use ckb_types::H256;
 use ckb_types::packed::{Byte, Bytes, BytesOpt, Transaction, WitnessArgs};
 use ckb_types::prelude::*;
 use lantern_sdk_schema::{
-    AccountCapabilities, Derivation, LockError, LockModule, LockType, ScriptTemplate, SeedKind,
-    SignedWitness, SigningRequest, WitnessSize,
+    AccountCapabilities, Derivation, LockError, LockModule, LockType, Network, ScriptTemplate,
+    SeedKind, SignedWitness, SigningRequest, WitnessSize,
 };
 
 use crate::error::SignerError;
@@ -24,6 +26,22 @@ pub const SECP256K1_BLAKE160_CODE_HASH: [u8; 32] = [
 
 /// `ScriptHashType::Type`.
 pub const HASH_TYPE_TYPE: u8 = 0x01;
+
+/// Out point of the mainnet genesis dep group carrying the system
+/// `secp256k1_blake160_sighash_all` script and its `secp256k1_data` cell.
+///
+/// Chain data, not a derivation: each chain's genesis block produced its own,
+/// so the two are unrelated values and neither exists on the other chain.
+pub const SECP256K1_DEP_GROUP_MAINNET: [u8; 32] = [
+    0x71, 0xa7, 0xba, 0x8f, 0xc9, 0x63, 0x49, 0xfe, 0xa0, 0xed, 0x3a, 0x5c, 0x47, 0x99, 0x2e, 0x3b,
+    0x40, 0x84, 0xb0, 0x31, 0xa4, 0x22, 0x64, 0xa0, 0x18, 0xe0, 0x07, 0x2e, 0x81, 0x72, 0xe4, 0x6c,
+];
+
+/// The same dep group on testnet. See [`SECP256K1_DEP_GROUP_MAINNET`].
+pub const SECP256K1_DEP_GROUP_TESTNET: [u8; 32] = [
+    0xf8, 0xde, 0x3b, 0xb4, 0x7d, 0x05, 0x5c, 0xdf, 0x46, 0x0d, 0x93, 0xa2, 0xa6, 0xe1, 0xb0, 0x5f,
+    0x74, 0x32, 0xf9, 0x77, 0x7c, 0x8c, 0x47, 0x4a, 0xbf, 0x4e, 0xec, 0x1d, 0x4a, 0xee, 0xd4, 0xbb,
+];
 
 const BIP39_SEED_LEN: usize = 64;
 
@@ -79,6 +97,23 @@ impl LockModule for Secp256k1Lock {
         // recovery id (1). Fixed, so fee estimation is exact rather than
         // conservative.
         WitnessSize::Fixed(SIGNATURE_LEN)
+    }
+
+    fn cell_deps(&self, network: Network) -> Vec<CellDep> {
+        let tx_hash = match network {
+            Network::Mainnet => SECP256K1_DEP_GROUP_MAINNET,
+            Network::Testnet => SECP256K1_DEP_GROUP_TESTNET,
+        };
+        vec![CellDep {
+            out_point: OutPoint {
+                tx_hash: H256(tx_hash),
+                index: 0u32.into(),
+            },
+            // The genesis cell is a dep GROUP: it lists the script binary and
+            // the `secp256k1_data` table it needs. `Code` would offer the VM
+            // the group cell's own contents instead.
+            dep_type: DepType::DepGroup,
+        }]
     }
 
     fn derive_lock_args(&self, seed: &[u8], derivation: &Derivation) -> Result<Vec<u8>, LockError> {
@@ -250,14 +285,15 @@ impl Secp256k1Lock {
 
 #[cfg(test)]
 mod tests {
+    use ckb_jsonrpc_types::DepType;
     use ckb_types::packed::{
         Byte, Bytes, BytesOpt, BytesVec, CellInput, CellInputVec, OutPoint, RawTransaction,
         Transaction, WitnessArgs,
     };
     use ckb_types::prelude::*;
     use lantern_sdk_schema::{
-        Derivation, LockError, LockModule, LockType, SeedKind, SigningGroup, SigningRequest,
-        WitnessSize,
+        Derivation, LockError, LockModule, LockType, Network, SeedKind, SigningGroup,
+        SigningRequest, WitnessSize,
     };
     use lantern_tx_builder::{EMPTY_WITNESS, placeholder_witness};
 
@@ -364,6 +400,42 @@ mod tests {
             hex::encode(t.code_hash),
             "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
         );
+    }
+
+    #[test]
+    fn each_network_gets_its_own_secp256k1_dep_group() {
+        // These out points are published chain data, not a derivation: the
+        // genesis transaction that carries each chain's system script dep
+        // group. They are also the single thing whose absence fails ONLY on
+        // chain, as `ScriptNotFound` — so they are pinned against the values
+        // ckb-sdk and lumos ship rather than against our own output.
+        let m = Secp256k1Lock;
+        let mainnet = m.cell_deps(Network::Mainnet);
+        let testnet = m.cell_deps(Network::Testnet);
+        assert_eq!(mainnet.len(), 1, "one dep group, not a list of code cells");
+        assert_eq!(testnet.len(), 1);
+        assert_eq!(
+            hex::encode(mainnet[0].out_point.tx_hash.as_bytes()),
+            "71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c"
+        );
+        assert_eq!(
+            hex::encode(testnet[0].out_point.tx_hash.as_bytes()),
+            "f8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aeed4bb"
+        );
+        assert_ne!(
+            mainnet[0].out_point.tx_hash, testnet[0].out_point.tx_hash,
+            "one chain's dep group does not exist on the other; sharing the \
+             constant would fail as ScriptNotFound and nowhere else"
+        );
+        for dep in [&mainnet[0], &testnet[0]] {
+            assert_eq!(u32::from(dep.out_point.index), 0);
+            assert_eq!(
+                dep.dep_type,
+                DepType::DepGroup,
+                "the secp256k1 system script is reached through a dep group; \
+                 `code` would point at the group cell itself"
+            );
+        }
     }
 
     #[test]

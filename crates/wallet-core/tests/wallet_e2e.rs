@@ -2,31 +2,28 @@
 //! key material cross-checks against `signer-secp256k1`, whose own tests
 //! pin the lumos and BIP32 vectors.
 
-use lantern_sdk_schema::{AccountRecord, Derivation, Network, SigningGroup, SigningRequest};
-use lantern_signer_secp256k1::{SigningKey, blake160, public_key, recover};
+use lantern_chain_backend::testing::FakeNode;
+use lantern_sdk_schema::{AccountRecord, Network};
+use lantern_signer_secp256k1::{SigningKey, blake160, public_key, recover, sighash_all};
 use lantern_vault::{Vault, VaultError};
 use lantern_wallet_core::{CoreError, MnemonicFormat, ProfilePaths, WalletCore, WordCount};
 use tempfile::tempdir;
 
-/// A `SigningRequest` naming one account's whole (single-input) group.
-///
-/// Real callers build this from a resolved `TransferPlan` (Task 12); these
-/// tests predate that builder, so the transaction itself is a placeholder.
-/// It is only ever handed to a stub or an `#[ignore]`d test.
-fn single_input_request() -> SigningRequest {
-    SigningRequest {
-        tx: ckb_types::packed::Transaction::default(),
-        inputs: Vec::new(),
-        groups: vec![SigningGroup {
-            lock_hash: [0u8; 32],
-            input_indices: vec![0],
-            derivation: Derivation {
-                change: 0,
-                index: 0,
-            },
-        }],
-    }
-}
+const SHANNONS_PER_CKB: u64 = 100_000_000;
+
+/// The system `secp256k1_blake160_sighash_all` code hash, as the indexer
+/// renders it in a `get_cells` reply.
+const SECP_CODE_HASH: &str = "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+
+/// What the fake node answers `send_transaction` with.
+const BROADCAST_HASH: &str = "0x8c94af53085ba511b1acba1fadd8d8215b45021f90fec7bf977687b6ee2103f1";
+
+/// RFC 0021's own published testnet vector — the identical string
+/// `account-registry`'s encoder is pinned against. Used as the recipient so
+/// the send path's address decoding is exercised against a third-party value
+/// rather than against a round trip through our own encoder.
+const RECIPIENT: &str = "ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqgutnjd";
+const RECIPIENT_ARGS: &str = "0xb39bbc0b3673c7d36450bc14cfcdad2d559c6c64";
 
 const TANK: &str =
     "tank planet champion pottery together intact quick police asset flower sudden question";
@@ -70,39 +67,53 @@ async fn create_three_accounts_lock_unlock_sign_and_recover() {
     let a3 = core.create_account("Four").await.expect("account 3");
     assert_eq!(a3.public_metadata["derivation"]["index"], 3);
 
-    // Account resolution happens before the module is ever reached, so this
-    // still exercises real behaviour even while `Secp256k1Lock::sign` is a
-    // Task 10 stub.
+    // Account resolution happens before anything else in `send`, so an
+    // unknown id is refused without a backend, a builder or a signer.
     assert!(matches!(
-        core.signer().sign("nope", &single_input_request()).await,
+        core.send("nope", RECIPIENT, 100 * SHANNONS_PER_CKB).await,
         Err(CoreError::AccountNotFound)
     ));
 }
 
 #[tokio::test]
-#[ignore = "Secp256k1Lock::sign is a stub until Task 10 of plan 1e; a real \
-            request also needs Task 14's wallet-core send path to build it \
-            correctly, not the placeholder tx single_input_request() uses"]
-async fn account_signing_recovers_the_public_key() {
+async fn a_broadcast_signature_recovers_to_the_sending_accounts_lock_args() {
+    // The replacement for this file's two `#[ignore]`d tests, which recovered
+    // over a hardcoded `[0x5a; 32]` digest that no code path ever produced and
+    // asserted a bare 65-byte signature where the API now returns an 85-byte
+    // `WitnessArgs`. Removing their `#[ignore]` would not have made them mean
+    // anything.
+    //
+    // This asserts the property they were reaching for, against the bytes that
+    // actually went on the wire: take the BROADCAST transaction, re-derive the
+    // RFC 0019 digest from it exactly as the on-chain lock does — zero the
+    // group's witness lock field in place and hash the whole stream — recover
+    // the public key from the signature it carries, and require its blake160
+    // to be the args the spent cells are locked to. Nothing here reads the
+    // wallet's own intermediate values.
     let dir = tempdir().expect("tempdir");
-    let paths = ProfilePaths::in_dir(dir.path());
-    let (mut core, _phrase) =
-        WalletCore::create(paths.clone(), b"pw", Network::Testnet, WordCount::Words24)
-            .expect("creates");
-    let a1 = core.create_account("Two").await.expect("account 1");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let account = core.create_account("Main").await.expect("account");
+    let args = lock_args_of(&account);
 
-    let digest = [0x5au8; 32];
-    let out = core
-        .signer()
-        .sign(&a1.id, &single_input_request())
+    let node = single_cell_node(&hex_args(&args), 1000 * SHANNONS_PER_CKB).await;
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+    core.send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
         .await
-        .expect("signs");
-    let signature = &out[0].witness;
-    assert_eq!(signature.len(), 65);
-    let mut arr = [0u8; 65];
-    arr.copy_from_slice(signature);
-    let recovered = recover(&arr, &digest).expect("recovers");
-    assert_eq!(blake160(&recovered).to_vec(), lock_args_of(&a1));
+        .expect("sends");
+
+    assert_eq!(
+        recover_blake160_from_broadcast(&broadcast_tx(&node)).to_vec(),
+        args,
+        "the signature on the wire must recover to the account that owns the \
+         cells it spends"
+    );
 }
 
 #[tokio::test]
@@ -158,27 +169,46 @@ async fn quantum_purse_combined_phrase_imports() {
 }
 
 #[tokio::test]
-#[ignore = "Secp256k1Lock::sign is a stub until Task 10 of plan 1e; a real \
-            request also needs Task 14's wallet-core send path to build it \
-            correctly, not the placeholder tx single_input_request() uses"]
-async fn quantum_purse_combined_phrase_signs_and_recovers() {
+async fn a_combined_phrase_wallet_sends_on_mainnet_and_its_signature_recovers() {
+    // The second of the two rewritten `#[ignore]`d tests. Its point is that a
+    // 36-word Quantum-Purse-style phrase reaches the identical signing path —
+    // the entropy is longer, the BIP39 seed it expands to is still 64 bytes —
+    // and that a mainnet wallet sends to a `ckb1…` recipient, not a `ckt1…`
+    // one. Everything else is the testnet case.
     let dir = tempdir().expect("tempdir");
-    let paths = ProfilePaths::in_dir(dir.path());
     let combined = format!("{P1} {P2} {P3}");
-    let mut core = WalletCore::import(paths, b"pw", Network::Mainnet, &combined).expect("imports");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Mainnet,
+        &combined,
+    )
+    .expect("imports");
     let account = core.create_account("PQ import").await.expect("account");
+    let args = lock_args_of(&account);
+    assert!(account.address.starts_with("ckb1"), "{}", account.address);
 
-    let digest = [0x77u8; 32];
-    let out = core
-        .signer()
-        .sign(&account.id, &single_input_request())
+    let node = single_cell_node(&hex_args(&args), 1000 * SHANNONS_PER_CKB).await;
+    core.attach_backend(light_manager(dir.path(), Network::Mainnet, node.url()).await)
+        .expect("same network");
+    // A self-transfer: the recipient is the account's own mainnet address, so
+    // no second fixture address is needed and the `ckb`/`ckt` prefix check is
+    // exercised from the mainnet side.
+    core.send(&account.id, &account.address, 100 * SHANNONS_PER_CKB)
         .await
-        .expect("signs");
-    let signature = &out[0].witness;
-    let mut arr = [0u8; 65];
-    arr.copy_from_slice(signature);
-    let recovered = recover(&arr, &digest).expect("recovers");
-    assert_eq!(blake160(&recovered).to_vec(), lock_args_of(&account));
+        .expect("sends");
+
+    assert_eq!(
+        recover_blake160_from_broadcast(&broadcast_tx(&node)).to_vec(),
+        args
+    );
+
+    // ...and a testnet address must not be spendable to from a mainnet wallet.
+    assert!(matches!(
+        core.send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
+            .await,
+        Err(CoreError::Registry(_))
+    ));
 }
 
 #[test]
@@ -377,6 +407,313 @@ async fn light_manager(
     manager
 }
 
+fn hex_args(args: &[u8]) -> String {
+    format!("0x{}", hex::encode(args))
+}
+
+/// One `get_cells` row, shaped exactly as a live testnet reply.
+fn cell_json(lock_args: &str, capacity: u64, tx_hash_fill: u8, index: u32) -> serde_json::Value {
+    serde_json::json!({
+        "block_number": "0x1554e00",
+        "out_point": {
+            "index": format!("{index:#x}"),
+            "tx_hash": format!("0x{}", hex::encode([tx_hash_fill; 32])),
+        },
+        "output": {
+            "capacity": format!("{capacity:#x}"),
+            "lock": { "code_hash": SECP_CODE_HASH, "hash_type": "type", "args": lock_args },
+            "type": null
+        },
+        "output_data": "0x",
+        "tx_index": "0x1"
+    })
+}
+
+/// A page of rows plus the continuation token the node would return.
+fn cells_page(cells: &[serde_json::Value], last_cursor: &str) -> serde_json::Value {
+    serde_json::json!({ "objects": cells, "last_cursor": last_cursor })
+}
+
+/// A node holding exactly one spendable cell under `lock_args`, whose scan
+/// exhausts in a single page (`last_cursor` is the real `"0x"` sentinel).
+async fn single_cell_node(lock_args: &str, capacity: u64) -> FakeNode {
+    FakeNode::builder()
+        .respond("local_node_info", local_node_info_json())
+        .respond("get_tip_header", header_json("0x1554ef4"))
+        .respond(
+            "get_cells",
+            cells_page(&[cell_json(lock_args, capacity, 0xa1, 0)], "0x"),
+        )
+        .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
+        .start()
+        .await
+}
+
+/// The transaction that actually reached the wire, as the node saw it.
+fn broadcast_tx(node: &FakeNode) -> serde_json::Value {
+    let (_, params) = node
+        .calls()
+        .into_iter()
+        .find(|(method, _)| method == "send_transaction")
+        .expect("broadcast happened");
+    params[0].clone()
+}
+
+/// Recover the signer's `blake160` from a BROADCAST transaction, re-deriving
+/// the RFC 0019 digest the way the on-chain lock does.
+///
+/// Nothing here reads any value the wallet computed: the transaction hash
+/// comes from the broadcast raw part, the digest from the broadcast witness
+/// slots with the group's lock field zeroed in place, and the public key from
+/// the signature those bytes carry. If the wallet hashed anything other than
+/// what it sent — the `-52` class this plan exists to rule out — the recovered
+/// key is a different, unrelated point and the comparison fails.
+fn recover_blake160_from_broadcast(tx_json: &serde_json::Value) -> [u8; 20] {
+    let json_tx: lantern_chain_backend::Transaction =
+        serde_json::from_value(tx_json.clone()).expect("a serialised transaction");
+    let packed = ckb_types::packed::Transaction::from(json_tx);
+
+    let mut tx_hash = [0u8; 32];
+    tx_hash.copy_from_slice(&packed.calc_tx_hash().raw_data());
+
+    let slots: Vec<Vec<u8>> = packed
+        .witnesses()
+        .into_iter()
+        .map(|w| w.raw_data().to_vec())
+        .collect();
+    let first = slots.first().expect("a witness slot for the group").clone();
+    assert_eq!(
+        first.len(),
+        85,
+        "a WitnessArgs whose only field is a 65-byte lock"
+    );
+    let mut signature = [0u8; 65];
+    signature.copy_from_slice(&first[20..85]);
+    let mut zeroed = first;
+    zeroed[20..85].fill(0);
+
+    // One account means one script group covering every input, so the
+    // remaining slots are the group's own and follow it in the stream.
+    let others: Vec<&[u8]> = slots[1..].iter().map(Vec::as_slice).collect();
+    let digest = sighash_all(&tx_hash, &zeroed, &others);
+    blake160(&recover(&signature, &digest).expect("the broadcast signature recovers"))
+}
+
+#[tokio::test]
+async fn sending_builds_signs_and_broadcasts() {
+    let dir = tempdir().expect("tempdir");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let account = core.create_account("Main").await.expect("account");
+    let args = lock_args_of(&account);
+
+    let node = single_cell_node(&hex_args(&args), 1000 * SHANNONS_PER_CKB).await;
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+
+    let hash = core
+        .send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
+        .await
+        .expect("sends");
+    assert_eq!(hex_args(hash.as_bytes()), BROADCAST_HASH);
+
+    let tx = broadcast_tx(&node);
+
+    let inputs = tx["inputs"].as_array().expect("inputs");
+    assert_eq!(
+        inputs.len(),
+        1,
+        "one 1000 CKB cell covers 100 CKB and a fee"
+    );
+    assert_eq!(
+        inputs[0]["previous_output"]["tx_hash"],
+        format!("0x{}", hex::encode([0xa1u8; 32])),
+        "the transaction must spend the cell the node served, not an invention"
+    );
+
+    let outputs = tx["outputs"].as_array().expect("outputs");
+    assert_eq!(outputs.len(), 2, "recipient and change");
+    assert_eq!(
+        outputs[0]["lock"]["args"], RECIPIENT_ARGS,
+        "the recipient address must decode to the script that gets paid"
+    );
+    assert_eq!(
+        outputs[0]["capacity"],
+        format!("{:#x}", 100 * SHANNONS_PER_CKB)
+    );
+    assert_eq!(
+        outputs[1]["lock"]["args"],
+        hex_args(&args),
+        "change must return to the sending account, not to the recipient"
+    );
+
+    // A fee must actually have been withheld: outputs summing to inputs is
+    // the zero-fee bug that reaches a node as PoolRejectedTransactionByMinFeeRate.
+    let change = u64::from_str_radix(
+        outputs[1]["capacity"]
+            .as_str()
+            .expect("hex")
+            .trim_start_matches("0x"),
+        16,
+    )
+    .expect("hex");
+    let fee = 1000 * SHANNONS_PER_CKB - 100 * SHANNONS_PER_CKB - change;
+    assert!(fee > 0, "the transaction paid no fee at all");
+    assert!(fee < SHANNONS_PER_CKB, "an absurd fee of {fee} shannons");
+
+    let witnesses = tx["witnesses"].as_array().expect("witnesses");
+    assert_eq!(
+        witnesses.len(),
+        inputs.len(),
+        "a witness slot per input, even when empty"
+    );
+    let first = witnesses[0].as_str().expect("hex");
+    assert_ne!(
+        &first[42..],
+        &"0".repeat(130),
+        "the lock field must carry a signature, not the placeholder"
+    );
+
+    assert!(
+        !tx["cell_deps"].as_array().expect("cell_deps").is_empty(),
+        "without the secp256k1 dep group the chain answers ScriptNotFound, \
+         and nothing local would notice"
+    );
+}
+
+#[tokio::test]
+async fn collecting_candidates_pages_until_the_scan_is_exhausted() {
+    // Two cells, one per page, and a transfer that cannot be funded by either
+    // alone: a pager that stopped after the first page would report
+    // `InsufficientFunds` over a wallet that has the money. The second page is
+    // empty with the real `"0x"` sentinel, which is what a live node returns
+    // once a scan is exhausted.
+    let dir = tempdir().expect("tempdir");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let account = core.create_account("Main").await.expect("account");
+    let args = hex_args(&lock_args_of(&account));
+
+    let node = FakeNode::builder()
+        .respond("local_node_info", local_node_info_json())
+        .respond("get_tip_header", header_json("0x1554ef4"))
+        .respond_sequence(
+            "get_cells",
+            vec![
+                cells_page(
+                    &[cell_json(&args, 85 * SHANNONS_PER_CKB, 0xb1, 0)],
+                    "0x40aabb",
+                ),
+                cells_page(
+                    &[cell_json(&args, 85 * SHANNONS_PER_CKB, 0xb2, 1)],
+                    "0x40aacc",
+                ),
+                cells_page(&[], "0x"),
+            ],
+        )
+        .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
+        .start()
+        .await;
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+
+    core.send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
+        .await
+        .expect("sends");
+
+    assert_eq!(
+        node.call_count("get_cells"),
+        3,
+        "two pages of rows plus the empty page that ends the scan"
+    );
+
+    let tx = broadcast_tx(&node);
+    let inputs = tx["inputs"].as_array().expect("inputs");
+    assert_eq!(inputs.len(), 2, "neither cell funds the transfer alone");
+    let witnesses = tx["witnesses"].as_array().expect("witnesses");
+    assert_eq!(witnesses.len(), 2, "a slot per input");
+    assert_eq!(
+        witnesses[1], "0x",
+        "only the group's first slot carries a signature; the rest must be \
+         present and empty, because the sighash stream length-prefixes each one"
+    );
+
+    // The multi-input digest is the property a one-input test cannot reach.
+    assert_eq!(
+        recover_blake160_from_broadcast(&tx).to_vec(),
+        lock_args_of(&account)
+    );
+}
+
+#[tokio::test]
+async fn a_cell_carrying_a_type_script_or_data_is_never_spent_as_plain_capacity() {
+    // A plain transfer writes outputs with no type script and no data. Feeding
+    // it a token cell would consume the tokens and re-issue none — the sUDT
+    // script permits burning, so this is silent loss rather than a rejection.
+    // The indexer also matches lock args by PREFIX by default, so a lock whose
+    // args merely start with ours comes back from the same query under a
+    // different script hash, which would put two script groups in one group's
+    // witness and fail on chain as -52.
+    let dir = tempdir().expect("tempdir");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let account = core.create_account("Main").await.expect("account");
+    let args = hex_args(&lock_args_of(&account));
+
+    let mut token = cell_json(&args, 1000 * SHANNONS_PER_CKB, 0xc1, 0);
+    token["output"]["type"] = serde_json::json!({
+        "code_hash": "0xc5e5dcf215925f7ef4dfaf5f4b4f105bc321c02776d6e7d52a1db3fcd9d011a4",
+        "hash_type": "type",
+        "args": "0x32e555f3ff8e135cece1351a6a2971518392c1e30375c1e006ad0ce8eac07947"
+    });
+    token["output_data"] = serde_json::json!("0x00e1f50500000000000000000000000000");
+
+    let mut longer_args = cell_json(&args, 1000 * SHANNONS_PER_CKB, 0xc2, 0);
+    longer_args["output"]["lock"]["args"] = serde_json::json!(format!("{args}ff"));
+
+    let node = FakeNode::builder()
+        .respond("local_node_info", local_node_info_json())
+        .respond("get_tip_header", header_json("0x1554ef4"))
+        .respond("get_cells", cells_page(&[token, longer_args], "0x"))
+        .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
+        .start()
+        .await;
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+
+    let err = core
+        .send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
+        .await
+        .expect_err("neither cell is plain capacity under this account's lock");
+    assert!(
+        matches!(
+            err,
+            CoreError::Build(lantern_tx_builder::BuildError::NoSpendableCells)
+        ),
+        "{err:?}"
+    );
+    assert_eq!(
+        node.call_count("send_transaction"),
+        0,
+        "nothing may reach the wire"
+    );
+}
+
 #[tokio::test]
 async fn a_new_account_records_a_start_height_now_rather_than_deferring_it() {
     // An imported wallet may have arbitrary history: genesis, always.
@@ -417,8 +754,6 @@ async fn a_new_account_records_a_start_height_now_rather_than_deferring_it() {
 
 #[tokio::test]
 async fn a_created_account_records_the_tip_read_at_creation_time() {
-    use lantern_chain_backend::testing::FakeNode;
-
     let node = FakeNode::builder()
         .respond("local_node_info", local_node_info_json())
         .respond("get_tip_header", header_json("0x1554ef4"))
@@ -498,8 +833,6 @@ fn assert_registered_two_distinct_scripts(params: &[serde_json::Value], expected
 
 #[tokio::test]
 async fn syncing_registers_every_script_at_its_recorded_height() {
-    use lantern_chain_backend::testing::FakeNode;
-
     let node = FakeNode::builder()
         .respond("local_node_info", local_node_info_json())
         .respond("get_tip_header", header_json("0x1554ef4"))
@@ -537,8 +870,6 @@ async fn syncing_registers_every_script_at_its_recorded_height() {
 
 #[tokio::test]
 async fn syncing_twice_never_rewinds_the_servers_filter_progress() {
-    use lantern_chain_backend::testing::FakeNode;
-
     // An imported wallet: every account starts at genesis, so a second sync
     // that resent the stored height would rewind the light client to block 0
     // and re-download every filter — on every launch, forever.
@@ -598,8 +929,6 @@ async fn syncing_twice_never_rewinds_the_servers_filter_progress() {
 
 #[tokio::test]
 async fn attaching_a_backend_on_another_network_is_refused() {
-    use lantern_chain_backend::testing::FakeNode;
-
     let node = FakeNode::builder()
         .respond("local_node_info", local_node_info_json())
         .start()

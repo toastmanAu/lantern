@@ -50,4 +50,13 @@ pub enum CoreError {
 
     #[error(transparent)]
     Backend(#[from] lantern_chain_backend::BackendError),
+
+    #[error(transparent)]
+    Build(#[from] lantern_tx_builder::BuildError),
+
+    /// A lock module returned a witness for a slot outside the script groups
+    /// it was handed. With third-party extension signers the alternative to
+    /// refusing is one module silently overwriting another lock's witness.
+    #[error("lock module returned a witness for index {index}, which is not in its script groups")]
+    WitnessOutOfRange { index: usize },
 }
