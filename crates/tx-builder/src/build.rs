@@ -18,7 +18,7 @@ use ckb_types::packed::{
     RawTransaction, Script as PackedScript, Transaction, Uint32, Uint64,
 };
 use ckb_types::prelude::*;
-use lantern_sdk_schema::{Derivation, InputContext, SigningGroup};
+use lantern_sdk_schema::{InputContext, SigningGroup};
 
 use crate::capacity::min_capacity;
 use crate::error::BuildError;
@@ -191,12 +191,10 @@ fn finish(
     let groups = vec![SigningGroup {
         lock_hash,
         input_indices: (0..inputs.len()).collect(),
-        // The request carries no derivation, so the builder cannot know it.
-        // `wallet-core` owns the account and fills this in before signing.
-        derivation: Derivation {
-            change: 0,
-            index: 0,
-        },
+        // Straight from the request. The builder has no way to derive this,
+        // and a default would be a knowingly-wrong field inside a plan being
+        // handed to a signer.
+        derivation: req.derivation,
     }];
 
     Ok(TransferPlan {
@@ -217,7 +215,9 @@ mod tests {
     use crate::{BuildError, TransferRequest};
     use ckb_jsonrpc_types::{CellDep, DepType, JsonBytes, OutPoint, Script, ScriptHashType};
     use ckb_types::H256;
-    use lantern_sdk_schema::{InputContext, WitnessSize};
+    use ckb_types::packed::WitnessArgs;
+    use ckb_types::prelude::*;
+    use lantern_sdk_schema::{Derivation, InputContext, WitnessSize};
 
     /// A secp-shaped lock: 20-byte args, so `min_capacity` is 61 CKB.
     fn script(fill: u8) -> Script {
@@ -254,6 +254,13 @@ mod tests {
             amount,
             change_lock: lock,
             witness_size: WitnessSize::Fixed(65),
+            // Deliberately not {0, 0}: a builder that ignored this field
+            // would still pass every assertion if the fixture used the
+            // default.
+            derivation: Derivation {
+                change: 1,
+                index: 7,
+            },
             cell_deps: vec![CellDep {
                 out_point: out_point(0xff),
                 dep_type: DepType::DepGroup,
@@ -380,5 +387,64 @@ mod tests {
         let plan = build_transfer(&req).expect("builds");
         assert_eq!(plan.groups.len(), 1);
         assert_eq!(plan.groups[0].input_indices.len(), plan.inputs.len());
+        // Not a new test, one line added to an existing one: without it
+        // nothing pins that the group's derivation comes from the request,
+        // and a builder that re-hardcoded a default would sign every
+        // non-default account with the wrong key, visible only on chain.
+        assert_eq!(plan.groups[0].derivation, req.derivation);
+    }
+    #[test]
+    fn the_group_slot_holds_a_zero_locked_witness_args_and_every_other_slot_is_empty() {
+        // The count alone proves nothing about CONTENT, and content is what
+        // the secp256k1 module checks before it will sign: it parses this
+        // slot as a `WitnessArgs` and requires
+        // `witness_with_lock(&parsed, &[0u8; 65]) == witnesses[first]`.
+        // The lock re-derives the digest on chain from the BROADCAST witness
+        // with its lock zeroed in place, so a slot that is empty, not a
+        // `WitnessArgs`, or carries a lock of the wrong length or a
+        // non-zeroed one makes the signed bytes and the broadcast bytes
+        // differ — a -52 that no local check would see. Pinned here, on the
+        // producing side, rather than only in the consumer that refuses it.
+        let req = request(vec![85, 85, 85], 150 * SHANNONS_PER_CKB);
+        let plan = build_transfer(&req).expect("builds");
+        assert!(plan.inputs.len() >= 2, "the point of this test");
+
+        let slots: Vec<Vec<u8>> = plan
+            .tx
+            .witnesses()
+            .into_iter()
+            .map(|w| w.raw_data().to_vec())
+            .collect();
+
+        let parsed = WitnessArgs::from_slice(&slots[0]).expect("slot 0 must be a WitnessArgs");
+        let lock = parsed
+            .lock()
+            .to_opt()
+            .expect("slot 0 must carry a lock field")
+            .raw_data();
+        assert_eq!(lock.len(), 65, "the lock must be the signature's length");
+        assert!(lock.iter().all(|b| *b == 0), "the lock must be zeroed");
+
+        for (i, slot) in slots.iter().enumerate().skip(1) {
+            assert!(
+                slot.is_empty(),
+                "slot {i} is not the group's first and must be empty, got {} bytes",
+                slot.len()
+            );
+        }
+    }
+
+    #[test]
+    fn the_reported_size_is_the_size_of_the_transaction_returned() {
+        // `plan.size` is measured on the change=0 shape, while `plan.tx`
+        // carries the real change value — a different object. They agree
+        // only because a `CellOutput`'s capacity is a fixed-width u64, which
+        // is the same fact the fixpoint's termination rests on. If that ever
+        // stopped holding, the reported size and the termination argument
+        // would both be wrong and nothing else would notice.
+        let req = request(vec![1000], 100 * SHANNONS_PER_CKB);
+        let plan = build_transfer(&req).expect("builds");
+        assert!(plan.change.is_some(), "exercise the with-change branch");
+        assert_eq!(plan.size, crate::size::measure(&plan.tx));
     }
 }

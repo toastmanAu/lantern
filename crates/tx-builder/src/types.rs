@@ -2,7 +2,7 @@
 
 use ckb_jsonrpc_types::{CellDep, Script};
 use ckb_types::packed::Transaction;
-use lantern_sdk_schema::{InputContext, SigningGroup, WitnessSize};
+use lantern_sdk_schema::{Derivation, InputContext, SigningGroup, WitnessSize};
 
 use crate::select::Candidate;
 
@@ -21,6 +21,17 @@ pub struct TransferRequest {
     /// The owning lock module's witness size. `wallet-core` reads this from
     /// the module, which is what keeps this crate free of the trait.
     pub witness_size: WitnessSize,
+    /// Where the spending account sits under its lock module's key tree.
+    ///
+    /// The builder cannot derive this and must not guess it: the signing
+    /// group carries it straight through to the lock module, which derives
+    /// the key from it. A wrong value produces a signature that recovers to
+    /// a different public key hash, which is invisible locally and fails on
+    /// chain — and only for accounts that are not the default, so a default
+    /// would look correct in every first test. Carried on the request so
+    /// that supplying it is structural rather than something a later caller
+    /// has to remember to patch into the plan.
+    pub derivation: Derivation,
     /// Cell deps the lock script needs. Omitting these fails only on-chain,
     /// as `ScriptNotFound`.
     pub cell_deps: Vec<CellDep>,
