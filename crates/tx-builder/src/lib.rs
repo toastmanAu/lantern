@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod build;
 pub mod capacity;
 pub mod error;
 pub mod fee;
@@ -16,6 +17,7 @@ pub mod size;
 pub mod types;
 pub mod witness;
 
+pub use build::build_transfer;
 pub use capacity::{SHANNONS_PER_CKB, min_capacity, script_occupied_bytes};
 pub use error::BuildError;
 pub use fee::{DEFAULT_FEE_RATE, fee_for};
