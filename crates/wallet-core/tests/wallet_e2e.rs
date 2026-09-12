@@ -103,6 +103,51 @@ async fn a_broadcast_signature_recovers_to_the_sending_accounts_lock_args() {
 }
 
 #[tokio::test]
+async fn sending_from_a_second_account_signs_with_that_accounts_own_derivation() {
+    // Every other send test here creates one account and spends from it, so
+    // `derivation` is always {0, 0} and a `send` that hardcoded {0, 0} would
+    // pass the whole suite. The consequence of that bug is a signature that
+    // recovers to a different public key hash — an on-chain -52 — and ONLY
+    // for accounts that are not the first one, which is precisely the case no
+    // other test reaches.
+    let dir = tempdir().expect("tempdir");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let first = core.create_account("One").await.expect("account 0");
+    let second = core.create_account("Two").await.expect("account 1");
+    assert_eq!(second.public_metadata["derivation"]["index"], 1);
+    let args = lock_args_of(&second);
+    assert_ne!(
+        lock_args_of(&first),
+        args,
+        "the two accounts must have distinct keys, or this proves nothing"
+    );
+
+    // Only the second account's cell exists, so the transfer can only be
+    // funded from it — and the recovered key must be the second account's.
+    let node = single_cell_node(&hex_args(&args), 1000 * SHANNONS_PER_CKB).await;
+    attach_and_register(
+        &mut core,
+        light_manager(dir.path(), Network::Testnet, node.url()).await,
+    )
+    .await;
+    core.send(&second.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
+        .await
+        .expect("sends");
+
+    assert_eq!(
+        recover_blake160_from_broadcast(&broadcast_tx(&node)).to_vec(),
+        args,
+        "the signature must recover to account 1's key, not account 0's"
+    );
+}
+
+#[tokio::test]
 async fn sending_through_a_backend_whose_index_is_incomplete_is_refused() {
     // `BackendManager::current_backend()` returns whatever is active, not
     // whatever is ready. This node holds the money and answers `get_cells`
