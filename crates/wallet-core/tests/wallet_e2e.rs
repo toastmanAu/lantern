@@ -4,15 +4,14 @@
 
 mod support;
 
-use lantern_chain_backend::testing::FakeNode;
-use lantern_sdk_schema::Network;
+use lantern_sdk_schema::{BackendStatus, Network};
 use lantern_signer_secp256k1::{SigningKey, blake160, public_key};
 use lantern_vault::{Vault, VaultError};
 use lantern_wallet_core::{CoreError, MnemonicFormat, ProfilePaths, WalletCore, WordCount};
 use support::{
-    BROADCAST_HASH, RECIPIENT, RECIPIENT_ARGS, SHANNONS_PER_CKB, broadcast_tx, cell_json,
-    cells_page, header_json, hex_args, light_manager, local_node_info_json, lock_args_of,
-    recover_blake160_from_broadcast, single_cell_node,
+    BROADCAST_HASH, RECIPIENT, RECIPIENT_ARGS, SHANNONS_PER_CKB, attach_and_register, broadcast_tx,
+    cell_json, cells_page, hex_args, light_manager, lock_args_of, recover_blake160_from_broadcast,
+    single_cell_node, synced_light_node,
 };
 use tempfile::tempdir;
 
@@ -86,8 +85,11 @@ async fn a_broadcast_signature_recovers_to_the_sending_accounts_lock_args() {
     let args = lock_args_of(&account);
 
     let node = single_cell_node(&hex_args(&args), 1000 * SHANNONS_PER_CKB).await;
-    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
-        .expect("same network");
+    attach_and_register(
+        &mut core,
+        light_manager(dir.path(), Network::Testnet, node.url()).await,
+    )
+    .await;
     core.send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
         .await
         .expect("sends");
@@ -98,6 +100,62 @@ async fn a_broadcast_signature_recovers_to_the_sending_accounts_lock_args() {
         "the signature on the wire must recover to the account that owns the \
          cells it spends"
     );
+}
+
+#[tokio::test]
+async fn sending_through_a_backend_whose_index_is_incomplete_is_refused() {
+    // `BackendManager::current_backend()` returns whatever is active, not
+    // whatever is ready. This node holds the money and answers `get_cells`
+    // perfectly — the ONLY thing wrong with it is that nothing has been
+    // registered to watch, so a light client's index is empty by
+    // construction and it reports `Connecting`. Without the gate the wallet
+    // would scan that index, find nothing, and tell a funded user they have
+    // no spendable cells.
+    let dir = tempdir().expect("tempdir");
+    let mut core = WalletCore::import(
+        ProfilePaths::in_dir(dir.path()),
+        b"pw",
+        Network::Testnet,
+        TANK,
+    )
+    .expect("imports");
+    let account = core.create_account("Main").await.expect("account");
+    let args = lock_args_of(&account);
+
+    let node = single_cell_node(&hex_args(&args), 1000 * SHANNONS_PER_CKB).await;
+    // Attached but deliberately NOT registered.
+    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
+        .expect("same network");
+
+    let err = core
+        .send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
+        .await
+        .expect_err("an unusable backend must not be spent through");
+    assert!(
+        matches!(
+            err,
+            CoreError::BackendNotUsable {
+                status: BackendStatus::Connecting
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(
+        node.call_count("get_cells"),
+        0,
+        "the scan must not run at all: its answer would be wrong, not merely partial"
+    );
+    assert_eq!(node.call_count("send_transaction"), 0);
+
+    // ...and the gate is a gate, not a wall: the identical wallet against the
+    // identical node succeeds once the scripts are registered. Without this
+    // half, a `send` that returned `BackendNotUsable` unconditionally would
+    // pass the assertions above.
+    core.sync_watched_scripts().await.expect("registers");
+    core.send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
+        .await
+        .expect("a registered, synced backend sends");
+    assert_eq!(node.call_count("send_transaction"), 1);
 }
 
 #[tokio::test]
@@ -173,8 +231,11 @@ async fn a_combined_phrase_wallet_sends_on_mainnet_and_its_signature_recovers() 
     assert!(account.address.starts_with("ckb1"), "{}", account.address);
 
     let node = single_cell_node(&hex_args(&args), 1000 * SHANNONS_PER_CKB).await;
-    core.attach_backend(light_manager(dir.path(), Network::Mainnet, node.url()).await)
-        .expect("same network");
+    attach_and_register(
+        &mut core,
+        light_manager(dir.path(), Network::Mainnet, node.url()).await,
+    )
+    .await;
     // A self-transfer: the recipient is the account's own mainnet address, so
     // no second fixture address is needed and the `ckb`/`ckt` prefix check is
     // exercised from the mainnet side.
@@ -352,8 +413,11 @@ async fn sending_builds_signs_and_broadcasts() {
     let args = lock_args_of(&account);
 
     let node = single_cell_node(&hex_args(&args), 1000 * SHANNONS_PER_CKB).await;
-    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
-        .expect("same network");
+    attach_and_register(
+        &mut core,
+        light_manager(dir.path(), Network::Testnet, node.url()).await,
+    )
+    .await;
 
     let hash = core
         .send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
@@ -443,9 +507,7 @@ async fn collecting_candidates_pages_until_the_scan_is_exhausted() {
     let account = core.create_account("Main").await.expect("account");
     let args = hex_args(&lock_args_of(&account));
 
-    let node = FakeNode::builder()
-        .respond("local_node_info", local_node_info_json())
-        .respond("get_tip_header", header_json("0x1554ef4"))
+    let node = synced_light_node(&args)
         .respond_sequence(
             "get_cells",
             vec![
@@ -463,8 +525,11 @@ async fn collecting_candidates_pages_until_the_scan_is_exhausted() {
         .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
         .start()
         .await;
-    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
-        .expect("same network");
+    attach_and_register(
+        &mut core,
+        light_manager(dir.path(), Network::Testnet, node.url()).await,
+    )
+    .await;
 
     core.send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
         .await
@@ -525,15 +590,16 @@ async fn a_cell_carrying_a_type_script_or_data_is_never_spent_as_plain_capacity(
     let mut longer_args = cell_json(&args, 1000 * SHANNONS_PER_CKB, 0xc2, 0);
     longer_args["output"]["lock"]["args"] = serde_json::json!(format!("{args}ff"));
 
-    let node = FakeNode::builder()
-        .respond("local_node_info", local_node_info_json())
-        .respond("get_tip_header", header_json("0x1554ef4"))
+    let node = synced_light_node(&args)
         .respond("get_cells", cells_page(&[token, longer_args], "0x"))
         .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
         .start()
         .await;
-    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
-        .expect("same network");
+    attach_and_register(
+        &mut core,
+        light_manager(dir.path(), Network::Testnet, node.url()).await,
+    )
+    .await;
 
     let err = core
         .send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)
@@ -588,15 +654,16 @@ async fn a_cell_whose_data_the_node_did_not_report_is_not_treated_as_empty() {
     let mut null_data = cell_json(&args, 1000 * SHANNONS_PER_CKB, 0xd2, 0);
     null_data["output_data"] = serde_json::Value::Null;
 
-    let node = FakeNode::builder()
-        .respond("local_node_info", local_node_info_json())
-        .respond("get_tip_header", header_json("0x1554ef4"))
+    let node = synced_light_node(&args)
         .respond("get_cells", cells_page(&[omitted, null_data], "0x"))
         .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
         .start()
         .await;
-    core.attach_backend(light_manager(dir.path(), Network::Testnet, node.url()).await)
-        .expect("same network");
+    attach_and_register(
+        &mut core,
+        light_manager(dir.path(), Network::Testnet, node.url()).await,
+    )
+    .await;
 
     let err = core
         .send(&account.id, RECIPIENT, 100 * SHANNONS_PER_CKB)

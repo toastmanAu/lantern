@@ -126,12 +126,40 @@ pub fn cells_page(cells: &[serde_json::Value], last_cursor: &str) -> serde_json:
     serde_json::json!({ "objects": cells, "last_cursor": last_cursor })
 }
 
+/// The chain tip every fixture here reports, and the filter height a synced
+/// light client has reached for the wallet's own script.
+pub const TIP: &str = "0x1554ef4";
+
+/// A `get_scripts` reply placing `lock_args` at `height`.
+///
+/// `send` gates on `BackendStatus::is_usable()`, and a light backend derives
+/// that by comparing `get_tip_header` with the `get_scripts` row for a script
+/// *this client registered*. Without this reply the backend reports
+/// `Connecting` — nothing of ours is watched, so its index is empty by
+/// construction — and a send is refused before a cell is fetched.
+pub fn scripts_at(lock_args: &str, height: &str) -> serde_json::Value {
+    serde_json::json!([{
+        "script": { "code_hash": SECP_CODE_HASH, "hash_type": "type", "args": lock_args },
+        "script_type": "lock",
+        "block_number": height
+    }])
+}
+
+/// The three replies a light backend needs before it will report `Synced`
+/// for `lock_args`: the tip, the filter progress, and an answer to the
+/// registration itself.
+pub fn synced_light_node(lock_args: &str) -> lantern_chain_backend::testing::FakeNodeBuilder {
+    FakeNode::builder()
+        .respond("local_node_info", local_node_info_json())
+        .respond("get_tip_header", header_json(TIP))
+        .respond("get_scripts", scripts_at(lock_args, TIP))
+        .respond("set_scripts", serde_json::json!(null))
+}
+
 /// A node holding exactly one spendable cell under `lock_args`, whose scan
 /// exhausts in a single page (`last_cursor` is the real `"0x"` sentinel).
 pub async fn single_cell_node(lock_args: &str, capacity: u64) -> FakeNode {
-    FakeNode::builder()
-        .respond("local_node_info", local_node_info_json())
-        .respond("get_tip_header", header_json("0x1554ef4"))
+    synced_light_node(lock_args)
         .respond(
             "get_cells",
             cells_page(&[cell_json(lock_args, capacity, 0xa1, 0)], "0x"),
@@ -139,6 +167,19 @@ pub async fn single_cell_node(lock_args: &str, capacity: u64) -> FakeNode {
         .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
         .start()
         .await
+}
+
+/// Attach `manager` and register the wallet's scripts, as a real launch does.
+///
+/// Registration is what makes a light backend `is_usable()`: until it has
+/// been asked to watch something it reports `Connecting`, and `send` refuses
+/// that rather than scanning an index guaranteed to hold nothing.
+pub async fn attach_and_register(
+    core: &mut lantern_wallet_core::WalletCore,
+    manager: lantern_chain_backend::BackendManager,
+) {
+    core.attach_backend(manager).expect("same network");
+    core.sync_watched_scripts().await.expect("registers");
 }
 
 /// The transaction that actually reached the wire, as the node saw it.

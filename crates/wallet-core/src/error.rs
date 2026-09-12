@@ -5,7 +5,7 @@
 //! deliberately drops the `bip39` detail, which can echo the offending word.
 
 use lantern_account_registry::RegistryError;
-use lantern_sdk_schema::{LockError, LockType, Network};
+use lantern_sdk_schema::{BackendStatus, LockError, LockType, Network};
 use lantern_vault::VaultError;
 use thiserror::Error;
 
@@ -47,6 +47,22 @@ pub enum CoreError {
     /// not at all.
     #[error("wallet is on {wallet:?} but the backend is on {backend:?}")]
     BackendNetworkMismatch { wallet: Network, backend: Network },
+
+    /// The active backend is attached and answering, but its index cannot be
+    /// trusted to be complete yet.
+    ///
+    /// [`BackendStatus::is_usable`] is the predicate, documented as "queries
+    /// can be trusted to return complete results". Spending through a backend
+    /// that fails it is not a degraded read, it is a wrong one: a light
+    /// client still fetching filters serves a partial cell set, so a funded
+    /// wallet reports no spendable cells or insufficient funds, and a lagging
+    /// index can serve a cell that has already been spent — which builds and
+    /// signs cleanly and is refused by the pool.
+    #[error(
+        "the backend reports {status:?} and its cell scan may be incomplete; \
+         wait until it reports syncing or synced before sending"
+    )]
+    BackendNotUsable { status: BackendStatus },
 
     #[error(transparent)]
     Backend(#[from] lantern_chain_backend::BackendError),

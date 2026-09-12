@@ -375,6 +375,21 @@ impl WalletCore {
         // a full cell scan to discover it is wasted latency.
         let recipient = decode_address(recipient, self.network)?;
         let change_lock = lock_script_for(&account, module)?;
+
+        // `current_backend()` hands back whatever is active, not whatever is
+        // ready. A backend that fails `is_usable()` — a light client still
+        // fetching filters, a supervised client that has not finished coming
+        // up, one reporting an error — still answers `get_cells`, just from
+        // an incomplete index. Everything downstream then behaves exactly as
+        // if the wallet were empty or short of funds, which is a lie told
+        // confidently; worse, a lagging index can serve a cell that is
+        // already spent, and that transaction builds, signs and is refused
+        // only by the pool. Spec §8 names this gate.
+        let status = backend.status().await;
+        if !status.is_usable() {
+            return Err(CoreError::BackendNotUsable { status });
+        }
+
         let candidates = collect_candidates(backend, &change_lock).await?;
         let request = TransferRequest {
             candidates,
@@ -514,6 +529,8 @@ mod tests {
     const SHANNONS_PER_CKB: u64 = 100_000_000;
     const BROADCAST_HASH: &str =
         "0x8c94af53085ba511b1acba1fadd8d8215b45021f90fec7bf977687b6ee2103f1";
+    /// The fake node's chain tip, and the height its filter sync has reached.
+    const TIP: &str = "0x1554ef4";
 
     struct FakeLock {
         kind: SeedKind,
@@ -589,6 +606,39 @@ mod tests {
         })
     }
 
+    /// A light client's tip, and its filter progress for `lock_args` at that
+    /// same height — i.e. fully synced for this wallet's one script.
+    ///
+    /// `send` gates on [`lantern_sdk_schema::BackendStatus::is_usable`], and a
+    /// light backend derives that by comparing `get_tip_header` against the
+    /// `get_scripts` row for a script it has registered. A fixture missing
+    /// either answer reports `Error` or `Connecting` and is refused before a
+    /// cell is ever fetched.
+    fn tip_header() -> serde_json::Value {
+        serde_json::json!({
+            "compact_target": "0x1a08a97e", "dao": format!("0x{}", "00".repeat(32)),
+            "epoch": "0x1", "extra_hash": format!("0x{}", "00".repeat(32)),
+            "hash": format!("0x{}", "01".repeat(32)),
+            "nonce": "0x0", "number": TIP,
+            "parent_hash": format!("0x{}", "00".repeat(32)),
+            "proposals_hash": format!("0x{}", "00".repeat(32)),
+            "timestamp": "0x1", "transactions_root": format!("0x{}", "00".repeat(32)),
+            "version": "0x0"
+        })
+    }
+
+    fn scripts_at_tip(lock_args: &str) -> serde_json::Value {
+        serde_json::json!([{
+            "script": {
+                "code_hash": format!("0x{}", "11".repeat(32)),
+                "hash_type": "type",
+                "args": lock_args
+            },
+            "script_type": "lock",
+            "block_number": TIP
+        }])
+    }
+
     /// A `get_cells` reply holding one spendable cell under `lock_args`,
     /// exhausting in a single page.
     fn one_cell(lock_args: &str, capacity: u64) -> serde_json::Value {
@@ -656,12 +706,20 @@ mod tests {
 
         let node = FakeNode::builder()
             .respond("local_node_info", node_info())
+            .respond("get_tip_header", tip_header())
+            .respond("get_scripts", scripts_at_tip(&args))
+            .respond("set_scripts", serde_json::json!(null))
             .respond("get_cells", one_cell(&args, 1000 * SHANNONS_PER_CKB))
             .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
             .start()
             .await;
         core.attach_backend(manager_for(dir.path(), node.url()).await)
             .expect("same network");
+        // Registration first, as a real launch does it: a light client that
+        // has been asked to watch nothing reports `Connecting`, and `send`
+        // refuses an unusable backend rather than scanning an index that is
+        // guaranteed to be empty.
+        core.sync_watched_scripts().await.expect("registers");
         // A self-transfer: `FakeLock`'s own template round-trips through the
         // address the registry rendered for it, so no second fixture is needed.
         core.send(&record.id, &record.address, 100 * SHANNONS_PER_CKB)
