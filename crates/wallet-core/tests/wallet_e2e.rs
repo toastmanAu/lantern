@@ -609,10 +609,13 @@ async fn a_cell_carrying_a_type_script_or_data_is_never_spent_as_plain_capacity(
     // A plain transfer writes outputs with no type script and no data. Feeding
     // it a token cell would consume the tokens and re-issue none — the sUDT
     // script permits burning, so this is silent loss rather than a rejection.
-    // The indexer also matches lock args by PREFIX by default, so a lock whose
-    // args merely start with ours comes back from the same query under a
-    // different script hash, which would put two script groups in one group's
-    // witness and fail on chain as -52.
+    // The second cell covers the other filter. The query asks for exact
+    // script matching, but the indexer's own default is PREFIX, so a lock
+    // whose args merely start with ours is exactly what an unhonoured request
+    // — or a node with a different default — would return, under a different
+    // script hash, putting two script groups in one group's witness: -52 on
+    // chain. The local filter is what makes that impossible rather than
+    // unlikely, which is why it is tested even now the query says `exact`.
     let dir = tempdir().expect("tempdir");
     let mut core = WalletCore::import(
         ProfilePaths::in_dir(dir.path()),

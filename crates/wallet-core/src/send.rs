@@ -63,12 +63,14 @@ pub fn decode_address(recipient: &str, network: Network) -> Result<Script, CoreE
 ///
 /// Two filters, both of which fail only on chain if they are missing:
 ///
-/// * **Exactly this lock.** The indexer matches script args by PREFIX unless
-///   told otherwise, so a lock whose args merely begin with this one's comes
-///   back from the same query under a different script hash. The builder takes
-///   its group's `lock_hash` from the first candidate and claims every input
-///   for it, so one stray cell puts two script groups under one signature —
-///   a `-52` with nothing local to catch it.
+/// * **Exactly this lock.** The builder takes its group's `lock_hash` from the
+///   first candidate and claims every input for it, so one stray cell puts two
+///   script groups under one signature — a `-52` with nothing local to catch
+///   it. The query now asks for exact script matching ([`CellQuery::search_key`]
+///   sends `script_search_mode: exact`), where the indexer's own default is
+///   PREFIX and would return every lock whose args merely begin with this
+///   one's. This filter stays regardless: it is the only part of the pair that
+///   does not depend on a node having honoured the request.
 /// * **No type script and no data.** A transfer writes outputs carrying
 ///   neither, so spending a token cell as plain capacity consumes the tokens
 ///   and re-issues none. sUDT permits burning, so that is silent loss rather

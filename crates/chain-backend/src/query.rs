@@ -2,7 +2,7 @@
 
 use ckb_jsonrpc_types::{BlockNumber, Script, Uint32};
 
-use crate::indexer::{Order, ScriptStatus, ScriptType, SearchKey};
+use crate::indexer::{Order, ScriptStatus, ScriptType, SearchKey, SearchMode};
 
 /// A cell scan the wallet wants to run.
 #[derive(Debug, Clone)]
@@ -45,13 +45,21 @@ impl CellQuery {
     /// an unstated server-side default to be safe. Asking for the data makes
     /// the `None` case genuinely exceptional rather than routine.
     ///
-    /// A real value, not `null`: the other optional fields stay omitted
-    /// because a node rejects them as explicit nulls.
+    /// `script_search_mode` is sent as `Exact` for the same reason.
+    /// Unset, a CKB indexer matches script args by PREFIX, so a query for one
+    /// lock also returns cells under every lock whose args merely begin with
+    /// it — a different script hash, and therefore a second script group.
+    /// Every caller of this type writes a whole script and means it; none
+    /// wants a prefix scan. Fixing it here rather than at one consumer is the
+    /// point: a consumer-side filter leaves the next caller on the default.
+    ///
+    /// Both are real values, not `null`: the other optional fields stay
+    /// omitted because a node rejects them as explicit nulls.
     pub fn search_key(&self) -> SearchKey {
         SearchKey {
             script: self.script.clone(),
             script_type: self.script_type,
-            script_search_mode: None,
+            script_search_mode: Some(SearchMode::Exact),
             filter: None,
             with_data: Some(true),
             group_by_transaction: None,
@@ -119,19 +127,30 @@ mod tests {
     }
 
     #[test]
-    fn a_query_asks_for_cell_data_rather_than_trusting_a_server_default() {
+    fn a_query_states_both_defaults_it_refuses_to_inherit_from_the_node() {
         // This is the shape that actually goes on the wire — `light.rs` and
-        // `full.rs` both send `query.search_key()`. `IndexerCell.output_data`
-        // is an `Option`, so a consumer that treats `None` as "no data"
-        // cannot distinguish a cell holding nothing from one whose data the
-        // node simply did not send: a token cell then reads as plain
-        // capacity. Asking explicitly is what makes `None` exceptional.
+        // `full.rs` both send `query.search_key()`.
+        //
+        // `with_data`: `IndexerCell.output_data` is an `Option`, so a consumer
+        // that treats `None` as "no data" cannot distinguish a cell holding
+        // nothing from one whose data the node simply did not send: a token
+        // cell then reads as plain capacity. Asking explicitly is what makes
+        // `None` exceptional.
+        //
+        // `script_search_mode`: unset, the indexer matches args by PREFIX, so
+        // a scan for one lock also returns cells under any lock whose args
+        // merely begin with it — a different script hash, and a second script
+        // group inside one signature. This assertion previously required the
+        // field to be ABSENT, which pinned the prefix default as if it were
+        // the intent; it is changed deliberately.
         let json = serde_json::to_value(CellQuery::lock(script()).search_key()).expect("ser");
         assert_eq!(json["with_data"], true, "{json}");
-        // ...and only that one: the rest stay omitted, because a node rejects
-        // an explicit `script_search_mode: null`.
+        assert_eq!(json["script_search_mode"], "exact", "{json}");
+        // ...and only those two: the rest stay omitted, because a node rejects
+        // them as explicit nulls. `"exact"` is a real value, so it does not
+        // fall foul of that rule.
         assert!(json.get("filter").is_none(), "{json}");
-        assert!(json.get("script_search_mode").is_none(), "{json}");
+        assert!(json.get("group_by_transaction").is_none(), "{json}");
     }
 
     #[test]
