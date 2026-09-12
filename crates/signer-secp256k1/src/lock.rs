@@ -437,11 +437,21 @@ mod tests {
         );
     }
 
-    /// The 65-byte signature a module wrote into a witness slot.
-    fn signature_in(witness: &[u8]) -> [u8; 65] {
-        assert_eq!(witness.len(), 85, "WitnessArgs with a 65-byte lock");
-        let mut sig = [0u8; 65];
-        sig.copy_from_slice(&witness[20..]);
+    /// The signature a module wrote into a witness slot's lock field.
+    ///
+    /// Read through the molecule accessor rather than sliced at a fixed
+    /// offset: a placeholder carrying an `input_type` puts bytes after the
+    /// lock body, and `witness[20..]` would swallow them.
+    fn signature_in(witness: &[u8]) -> [u8; SIGNATURE_LEN] {
+        let lock = WitnessArgs::from_slice(witness)
+            .expect("WitnessArgs")
+            .lock()
+            .to_opt()
+            .expect("a lock field")
+            .raw_data();
+        assert_eq!(lock.len(), SIGNATURE_LEN, "a 65-byte lock");
+        let mut sig = [0u8; SIGNATURE_LEN];
+        sig.copy_from_slice(&lock);
         sig
     }
 
@@ -572,12 +582,22 @@ mod tests {
         args.build().as_bytes().to_vec()
     }
 
-    /// What the on-chain lock does before re-deriving the digest: replace the
-    /// broadcast witness's lock field with zeroes of the same length.
+    /// What the on-chain lock does before re-deriving the digest: zero the
+    /// broadcast witness's lock bytes IN PLACE, preserving every other field.
+    ///
+    /// The script memsets the lock body; it does not rebuild the witness. A
+    /// version of this helper that dropped `input_type`/`output_type` would
+    /// make the assertions below vacuous — both sides lock-only by
+    /// construction — and would state the opposite of the property.
     fn zero_lock(witness: &[u8]) -> Vec<u8> {
         let args = WitnessArgs::from_slice(witness).expect("WitnessArgs");
         let len = args.lock().to_opt().expect("a lock field").raw_data().len();
-        witness_args(&vec![0u8; len], None)
+        let zeroed = Bytes::new_builder().set(vec![Byte::new(0); len]).build();
+        args.as_builder()
+            .lock(BytesOpt::new_builder().set(Some(zeroed)).build())
+            .build()
+            .as_bytes()
+            .to_vec()
     }
 
     #[tokio::test]
@@ -588,12 +608,15 @@ mod tests {
         // field. A placeholder carrying an `input_type` is the case an
         // emitter that rebuilds from scratch silently gets wrong.
         let seed = [7u8; 64];
-        let slot = witness_args(&[0u8; SIGNATURE_LEN], None);
         assert_eq!(
-            slot,
+            witness_args(&[0u8; SIGNATURE_LEN], None),
             placeholder_witness(WitnessSize::Fixed(SIGNATURE_LEN)),
             "this test's own witness builder must agree with the real one"
         );
+        // A placeholder carrying a field beside the lock. Over a lock-only
+        // placeholder this assertion cannot discriminate: rebuilding from
+        // scratch happens to produce the same bytes.
+        let slot = witness_args(&[0u8; SIGNATURE_LEN], Some(&[0xEE; 4]));
 
         let req = request(
             tx_with(2, &[&slot, EMPTY_WITNESS]),
@@ -642,10 +665,7 @@ mod tests {
                 .to_vec(),
             vec![0xEEu8; 4]
         );
-        assert_eq!(
-            zero_lock(&out[0].witness),
-            witness_args(&[0u8; SIGNATURE_LEN], None)
-        );
+        assert_eq!(zero_lock(&out[0].witness), slot);
     }
 
     #[tokio::test]
