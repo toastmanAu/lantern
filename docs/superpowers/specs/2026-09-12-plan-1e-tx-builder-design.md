@@ -505,6 +505,27 @@ hand you" surface over an unlocked vault is a foot-gun once a caller can ask
 the wallet to build and sign its own transfer, and `send` is the single
 signing entry point §7 already describes in spirit.
 
+**§5's fee model prices bytes; CKB prices weight, and the cycle axis is
+unmeasured.** `fee.rs` argued that measuring the transaction exactly removes
+the under-count class outright, so the customary 20% margin "buys nothing".
+That is true on the serialisation axis and only there. A pool orders
+transactions by `get_transaction_weight(tx_size, cycles) = max(tx_size, cycles
+× 0.000_170_571_4)` (`ckb-types-1.1.1/src/core/tx_pool.rs:298`, the constant
+at line 279), so a transaction whose script cycles outweigh its bytes is
+priced on cycles — a quantity `tx-builder` cannot measure, having by design no
+script VM and no backend.
+
+For secp256k1 the size term wins in the shapes this crate builds, but not by
+a comfortable margin: the exact-landing no-change transfer is 355 bytes
+against a cycle weight roughly in the 290–410 range, and nothing pins secp's
+real cycle count because nothing here can. For the Falcon and ML-DSA locks
+§4.1 exists to generalise to, verification cycles dominate and a size-derived
+fee under-pays. The behaviour is unchanged and the documentation now says
+which axis is eliminated and which is not; the measurement that would settle
+it is the live broadcast, which should record the `cycles` a node reports from
+`get_transaction` — that number is what a cycle-aware fee model must be built
+against.
+
 **What is not proven.** Every claim above is checked against a pure function,
 a recorded testnet vector, or an independent encoder — never a broadcast. No
 transaction produced by this crate and `wallet-core::send` has been submitted

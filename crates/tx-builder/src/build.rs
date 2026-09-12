@@ -403,13 +403,24 @@ mod tests {
 
     #[test]
     fn the_fee_covers_the_measured_size_at_the_requested_rate() {
+        // The oracle is the arithmetic relation, multiplied out in `u128`,
+        // with no call back into `fee_for`. Comparing `plan.fee` against
+        // `fee_for(plan.size, rate)` is `x >= x` with respect to rounding
+        // direction — `plan.fee` IS that call's result — so it cannot detect
+        // a `fee_for` that floors instead of rounding up, which is the exact
+        // bug this assertion exists to catch. Same ruling as the integration
+        // test in `tests/fee_properties.rs`, applied to its sibling here.
         let req = request(vec![1000], 100 * SHANNONS_PER_CKB);
         let plan = build_transfer(&req).expect("builds");
+        let fee = u128::from(plan.fee);
+        let size = plan.size as u128;
+        let rate = u128::from(req.fee_rate);
         assert!(
-            plan.fee >= crate::fee::fee_for(plan.size, req.fee_rate),
-            "fee {} under-pays for {} bytes",
+            fee * 1000 >= size * rate,
+            "fee {} under-pays for {} bytes at rate {}",
             plan.fee,
-            plan.size
+            plan.size,
+            req.fee_rate
         );
     }
 

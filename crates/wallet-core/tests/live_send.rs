@@ -9,11 +9,14 @@
 //!   `LANTERN_LIVE_TESTNET=1` `LANTERN_LIVE_MNEMONIC`="..." \
 //!     cargo test -p lantern-wallet-core --test `live_send` -- --ignored --nocapture
 //!
-//! The mnemonic is read from the environment and handed straight to
-//! `WalletCore::import`, which zeroizes it on drop. Nothing in this file
-//! ever formats, logs, or asserts against the phrase, the seed, or any
-//! derived secret — only public chain data (an address, a transaction
-//! hash) reaches stdout.
+//! The mnemonic is read from the environment into a plain `String` and
+//! handed to `WalletCore::import`, which only borrows it: the vault zeroizes
+//! what it stores, but this file's own `String` is **not** zeroized — it is
+//! dropped and its heap bytes left behind, as the comment at the drop site
+//! also says. What this file does guarantee is narrower and is the reason
+//! the plain `String` is tolerable: nothing here ever formats, logs, asserts
+//! against, or panics with the phrase, the seed, or any derived secret. Only
+//! public chain data — an address, a transaction hash — reaches stdout.
 
 use lantern_chain_backend::BackendManager;
 use lantern_sdk_schema::{BackendKind, BackendProfile, Network};
@@ -36,10 +39,21 @@ fn gate() -> Gate {
     if std::env::var("LANTERN_LIVE_TESTNET").as_deref() != Ok("1") {
         return Gate::Skipped;
     }
-    let phrase = std::env::var("LANTERN_LIVE_MNEMONIC").expect(
-        "LANTERN_LIVE_TESTNET=1 was set but LANTERN_LIVE_MNEMONIC was not — \
-         half-configured environment refused rather than silently skipped",
-    );
+    // Matched, not `.expect()`ed. `VarError::NotUnicode(OsString)`'s `Debug`
+    // embeds the variable's CONTENTS, and `expect` formats the error with
+    // `{:?}` — so a mnemonic that was not valid UTF-8 would be printed in the
+    // panic message and captured in whatever ran the test. Unreachable for a
+    // well-formed BIP-39 phrase, but "no secret material in any Display or
+    // Debug" is a categorical rule, and this file's module doc promises
+    // nothing here ever formats the phrase. The panic names the variable and
+    // nothing else.
+    let Ok(phrase) = std::env::var("LANTERN_LIVE_MNEMONIC") else {
+        panic!(
+            "LANTERN_LIVE_TESTNET=1 was set but LANTERN_LIVE_MNEMONIC was not readable as \
+             a UTF-8 string — half-configured environment refused rather than silently \
+             skipped (the variable's value is deliberately not shown)"
+        )
+    };
     Gate::Enabled(phrase)
 }
 
