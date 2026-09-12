@@ -174,20 +174,41 @@ mod tests {
     #[tokio::test]
     async fn a_module_signs_from_a_request_rather_than_a_digest() {
         let fake = Fake;
+        // Two groups, each with non-monotonic input_indices that do not
+        // start at 0. This is deliberate: with a single group of [0] (an
+        // earlier version of this test), a `Fake` that ignores `req` and
+        // always returns one canned witness at index 0 is indistinguishable
+        // from a correct implementation. Here, per group, the true minimum
+        // input index, the group's position in `groups`, and the first
+        // element of `input_indices` are all different (mins {2, 4} vs.
+        // positions {0, 1} vs. firsts {7, 9}), so the asserted output can
+        // only come from actually reading each group's `input_indices` and
+        // taking its minimum.
         let req = SigningRequest {
             tx: ckb_types::packed::Transaction::default(),
             inputs: Vec::new(),
-            groups: vec![SigningGroup {
-                lock_hash: [0u8; 32],
-                input_indices: vec![0],
-                derivation: Derivation {
-                    change: 0,
-                    index: 0,
+            groups: vec![
+                SigningGroup {
+                    lock_hash: [0u8; 32],
+                    input_indices: vec![7, 2, 5],
+                    derivation: Derivation {
+                        change: 0,
+                        index: 0,
+                    },
                 },
-            }],
+                SigningGroup {
+                    lock_hash: [1u8; 32],
+                    input_indices: vec![9, 4],
+                    derivation: Derivation {
+                        change: 0,
+                        index: 1,
+                    },
+                },
+            ],
         };
         let out = fake.sign(b"seed", &req).await.expect("signs");
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].index, 0, "the group's witness slot");
+        assert_eq!(out.len(), 2, "one witness per group, not a fixed count");
+        assert_eq!(out[0].index, 2, "the first group's minimum input index");
+        assert_eq!(out[1].index, 4, "the second group's minimum input index");
     }
 }
