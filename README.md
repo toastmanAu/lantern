@@ -4,7 +4,7 @@
 > Tauri 2 shell + Rust core + React/TypeScript frontend.
 > Working title — final name TBD.
 
-**Status:** Plans 1a (scaffold), 1b (vault), 1c (accounts + secp256k1 signing) and 1d (chain backend + light-client supervision) complete. Next: plan 1e (tx-builder).
+**Status:** Plans 1a (scaffold), 1b (vault), 1c (accounts + secp256k1 signing) and 1d (chain backend + light-client supervision) complete. Plan 1e (transaction builder) is complete **pending live broadcast**: every claim it makes is checked against a pure function, a recorded testnet vector or an independent encoder, but no transaction this code built has been submitted to a node or accepted by a pool. Its goal §1.7 — a real transfer accepted by the testnet tx-pool — is unmet until someone runs the gated `crates/wallet-core/tests/live_send.rs` by hand with a funded secp256k1 key. Next: plan 1f (Tauri commands + extension host).
 
 ## Documents
 

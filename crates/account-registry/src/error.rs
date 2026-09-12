@@ -18,4 +18,10 @@ pub enum RegistryError {
 
     #[error("address encoding failed")]
     Address,
+
+    /// Why a string is not a usable address. Addresses are public data, so
+    /// naming the reason leaks nothing and is the difference between "try
+    /// again" and knowing a mainnet address was pasted into a testnet wallet.
+    #[error("invalid address: {0}")]
+    InvalidAddress(&'static str),
 }

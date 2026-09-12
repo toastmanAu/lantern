@@ -46,7 +46,7 @@ impl LockRegistry {
 
 #[cfg(test)]
 mod tests {
-    use lantern_sdk_schema::LockType;
+    use lantern_sdk_schema::{LockType, WitnessSize};
 
     use super::LockRegistry;
     use crate::error::CoreError;
@@ -58,7 +58,7 @@ mod tests {
             .get(LockType::Secp256k1Blake160)
             .expect("registered");
         assert_eq!(module.extension_id(), "core.secp256k1");
-        assert_eq!(module.witness_lock_len(), 65);
+        assert_eq!(module.witness_size(), WitnessSize::Fixed(65));
     }
 
     #[test]

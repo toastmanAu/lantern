@@ -13,7 +13,7 @@ mod error;
 mod record;
 mod store;
 
-pub use address::encode_full;
+pub use address::{decode_full, encode_full};
 pub use error::RegistryError;
 pub use record::to_record;
 pub use store::{AccountRegistry, StoredAccount, WalletOrigin, account_id};

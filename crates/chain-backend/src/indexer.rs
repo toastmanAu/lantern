@@ -64,13 +64,23 @@ pub struct SearchKey {
 
 impl SearchKey {
     /// Search by lock script, the common case for a wallet.
+    ///
+    /// `with_data` and `script_search_mode` are both asked for explicitly,
+    /// matching [`crate::query::CellQuery::search_key`]. A caller cannot
+    /// distinguish "this cell holds no data" from "the node did not send any"
+    /// once [`IndexerCell::output_data`] comes back `None`; and left unset,
+    /// `script_search_mode` matches args by PREFIX, so a scan for one lock
+    /// returns cells under every lock whose args begin with it. Either
+    /// default is a latent footgun, and leaving it to the server in one
+    /// constructor while fixing it in the other is how the next caller
+    /// inherits it.
     pub const fn lock(script: Script) -> Self {
         Self {
             script,
             script_type: ScriptType::Lock,
-            script_search_mode: None,
+            script_search_mode: Some(SearchMode::Exact),
             filter: None,
-            with_data: None,
+            with_data: Some(true),
             group_by_transaction: None,
         }
     }
@@ -172,11 +182,23 @@ mod tests {
             json["script"]["args"],
             "0x72f72b0cafd31de5072b10e84fc6c9d7d7596db7"
         );
-        // Optional fields must be omitted, not sent as null: a node rejects
-        // `script_search_mode: null`.
+        // Optional fields that are genuinely unset must be omitted, not sent
+        // as null: a node rejects `script_search_mode: null`.
         assert!(json.get("filter").is_none(), "{json}");
-        assert!(json.get("script_search_mode").is_none(), "{json}");
-        assert!(json.get("with_data").is_none(), "{json}");
+        assert!(json.get("group_by_transaction").is_none(), "{json}");
+        // `with_data` and `script_search_mode` are the exceptions, and
+        // deliberately so: both are sent as real values. Omitting `with_data`
+        // leaves the node's own default deciding whether `output_data` comes
+        // back at all, and a consumer cannot tell an absent field from a
+        // confirmed-empty one — which is how a cell carrying token data gets
+        // mistaken for plain capacity. Omitting `script_search_mode` leaves
+        // the indexer matching args by PREFIX, which returns cells under
+        // locks this caller never asked about. Real values, not `null`, so
+        // the null-rejection rule above is not violated — this assertion
+        // required `script_search_mode` to be absent before, and is changed
+        // deliberately.
+        assert_eq!(json["with_data"], true, "{json}");
+        assert_eq!(json["script_search_mode"], "exact", "{json}");
     }
 
     #[test]

@@ -10,10 +10,12 @@ pub mod backend;
 pub mod error;
 pub mod export;
 pub mod lock;
+pub mod signing;
 pub mod types;
 
 pub use backend::{BackendCapabilities, BackendKind, BackendProfile, BackendStatus};
 pub use error::{LockError, SchemaError};
 pub use export::typescript_bindings;
-pub use lock::{LockModule, ScriptTemplate, SeedKind};
+pub use lock::{CellDep, LockModule, ScriptTemplate, SeedKind, WitnessSize};
+pub use signing::{InputContext, SignedWitness, SigningGroup, SigningRequest};
 pub use types::{AccountCapabilities, AccountRecord, Derivation, LockType, Network};

@@ -19,6 +19,9 @@ pub use error::SignerError;
 pub use hash::blake160;
 pub use hd::{Branch, CKB_COIN_TYPE, derive_ckb_key};
 pub use key::{PublicKey, SigningKey, public_key};
-pub use lock::{HASH_TYPE_TYPE, SECP256K1_BLAKE160_CODE_HASH, Secp256k1Lock};
+pub use lock::{
+    HASH_TYPE_TYPE, SECP256K1_BLAKE160_CODE_HASH, SECP256K1_DEP_GROUP_MAINNET,
+    SECP256K1_DEP_GROUP_TESTNET, Secp256k1Lock,
+};
 pub use sighash::sighash_all;
 pub use sign::{recover, sign_recoverable};

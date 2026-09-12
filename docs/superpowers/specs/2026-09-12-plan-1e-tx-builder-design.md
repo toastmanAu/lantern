@@ -352,3 +352,185 @@ closed. The fix belongs to plan 1f, but a send path that gates on
 | Measure size | Compute size analytically | Removes the entire under-count class recorded in §1 of the CKB ruleset |
 | Direct `ckb-types` dependency | Route through `chain-backend` | Would drag `reqwest`/`tokio` into a pure crate for type definitions |
 | Live broadcast ends the plan | Stop at a signed transaction | Only pool acceptance exercises min-fee-rate, capacity and witness validity — the gap this project's log records most often |
+
+## 10. Refinements during implementation
+
+A great deal diverged from this document as written, all of it discovered by
+implementation and settled by controller ruling during the plan's execution
+(the full reasoning for each lives in the plan's SDD ledger). None of it
+changes §1's goals or §9's decisions; each is recorded here because a spec
+that claims to match reality earns its authority by being checked.
+
+**§3.3's size ceiling: this document was right, an intermediate ruling was
+wrong, and the module no longer restates the formula.** `MAX_TX_SIZE` is
+`512_000` — `ckb_types::core::tx_pool::TRANSACTION_SIZE_LIMIT`,
+`ckb-types-1.1.1/src/core/tx_pool.rs:309`, referenced through the `ckb-types`
+`tx-builder` already depends on rather than copied as a literal.
+
+An earlier ruling during implementation set the constant to `597_000`
+(`MAX_BLOCK_BYTES`) on the stated premise that `512_000` had *no reachable
+provenance in the pinned crates*. That premise was false. The constant was
+there the whole time, in a crate already in this crate's dependency graph, and
+its own doc comment states the semantics we want exactly: "The maximum size of
+the tx-pool to accept transactions. The ckb consensus does not limit the size
+of a single transaction, but if the size of the transaction is close to the
+limit of the block, it may cause the transaction to fail to be packed." The
+search that reported nothing looked at `ckb-chain-spec` and `ckb-constant` and
+did not look at `ckb-types`; the ruling that followed it is recorded here as
+mistaken rather than quietly reversed, because a spec's authority comes from
+being checked and this is the check.
+
+What survives from that reasoning is the observation, which is correct and
+worth keeping: **CKB consensus imposes no per-transaction byte ceiling.**
+There are two real limits and neither is a per-transaction consensus rule —
+`MAX_BLOCK_BYTES` (`597_000`, `ckb-chain-spec-1.1.1/src/consensus.rs:83`,
+RFC 0020) bounds a whole block, and `TRANSACTION_SIZE_LIMIT` bounds what a
+pool will accept. The pool's is the tighter one and it is the first thing a
+broadcast meets, so that is where we guard: a transaction above it never
+reaches a block at all, whatever consensus would have allowed.
+
+The caveat that remains points the other way. A node operator can configure a
+*lower* `max_tx_size` than the default, which this crate cannot see, so
+`TransactionTooLarge` is a necessary condition for acceptance and not a
+sufficient one — unreached in plan 1e either way, where a plain transfer is on
+the order of 1 KB.
+
+Separately, `size.rs`'s `measure` does not build the sum §3.3 describes
+(`.as_slice().len() + 4`). It delegates to
+`ckb_types::packed::Transaction::serialized_size_in_block()` — the identical
+function CKB's own transaction verifier uses to compute the size its
+fee-rate check divides by (`ckb-gen-types`'s
+`serialized_size_in_block`, consumed by `ckb-verification`'s
+`TransactionVerifier`). This makes §3.3's promise — the artifact measured is
+the artifact the pool will price — true by construction rather than by a
+constant this crate maintains, and removes the last hand-written arithmetic
+from the sizing path. The `+ 4` was correct all along; it is molecule's
+`NUMBER_SIZE`, the offset entry a transaction occupies in a block's
+transaction `dynvec`, not a number this crate needed to know once the delegate
+was in place.
+
+**§4.2's `SigningGroup`/selection ordering needed a total order, and
+`Candidate::tie_break` changed shape to give it one.** As specced,
+`tie_break` returned `&[u8]` (a transaction hash). Two cells from the *same*
+transaction — an entirely ordinary shape, produced by any transfer paying two
+outputs to one address — tie under that comparator, and the tie then falls
+through to `sort_by`'s stability, which resolves it by *input order*: a
+property of the indexer's paging, not of this crate. `Candidate::tie_break`
+now returns `(&[u8], u32)` — the tx hash together with the output index —
+which uniquely identifies an `OutPoint` and is therefore genuinely total,
+still without allocating. §5's fixpoint and §7.2's golden vector both depend
+on selection order being deterministic from the candidates alone, which is
+the property this closes.
+
+**§4.2's `SigningGroup` needed a `Derivation` that a builder could get right by
+construction.** As specced, `SigningGroup.derivation` had no producer in
+`tx-builder` and would have been left `{0, 0}` for `wallet-core` to overwrite
+— a discipline a future caller must remember, which is exactly the failure
+mode §4.2's "one seed exposure" property is meant to make structural rather
+than conventional. `TransferRequest` now carries a `derivation: Derivation`
+field, and `build_transfer` fills every group from it, so a `TransferPlan` for
+a non-default account can never carry a knowingly-wrong key index.
+
+**§3.2's dependency exception did not go far enough, and this document's
+"only" was unimplementable as written.** §3.2 states the `ckb-types` /
+`ckb-jsonrpc-types` exception for `tx-builder` alone. But §3.1 itself assigns
+`SigningRequest` (carrying a `Transaction`), `InputContext` (carrying
+`OutPoint`, `Script`) and the `LockModule` trait to `sdk-schema`, and those
+types cannot be declared without the same dependency — so the literal word
+"only" contradicts §3.1's own type-ownership assignment. Both crates are
+added to `sdk-schema` (§4.2's types) and to `signer-secp256k1` (whose `sign`
+implementation needs packed transaction types), and the exception's intent —
+no *new* third-party crate enters the workspace, and chain types stay
+version-consistent via the workspace pin — holds in both cases: all three
+crates use the same already-pinned `"=1.1.1"`, and no new `[[package]]` entry
+appears in the lockfile.
+
+**§4 gained a method §4 did not specify: `LockModule::cell_deps(network) ->
+Vec<CellDep>`.** Needed once `wallet-core`'s send path had to supply
+`TransferRequest.cell_deps` from something other than a hardcoded constant —
+a lock module is the only thing that knows what its own script needs as a
+dependency, and hardcoding it in `wallet-core` would have broken the moment a
+second lock type existed.
+
+**§4.2's grouped-signing contract turned out to need one more invariant than
+written: the secp256k1 module refuses to sign unless the group's first
+witness slot is byte-for-byte its own expected placeholder.** The digest RFC
+0019 defines is taken over whatever bytes sit in that slot; on chain, the lock
+recomputes the same digest from the *broadcast* witness with its lock zeroed
+in place. Nothing in the contract as specced required those two to match, and
+three distinct builder mistakes — a shorter or longer placeholder, one
+carrying stray `input_type`/`output_type` fields, or an empty slot entirely —
+would each have produced a wrong signature that only fails on chain, with
+nothing local to catch it. The signer now checks equality against its own
+placeholder before signing and refuses otherwise. The corollary the PQ plans
+must reconcile: this check is unsatisfiable as written for a *variable*-length
+lock (§4.1), because `for_fee_estimate()` returns the maximum and a real
+signature under that maximum would be shorter than the placeholder it is
+checked against. The reconciliation is to pad the real signature up to the
+placeholder's length on chain, never to shrink the placeholder to the
+signature — sizing the lock to the signature is circular against a
+self-committing digest.
+
+**§3.1's "resolved input contents" property needed a filter at the one call
+site that collects them, and the indexer query needed an explicit flag it did
+not carry.** `wallet-core`'s candidate collection now filters to cells under
+exactly the sending lock with no type script and no data — otherwise an sUDT
+or notification cell could be selected as if it were plain capacity, which is
+the exact production failure this project's feedback log already records
+under a different codebase (lock error 46, 2026-06-22). That filter is only
+as good as the data it is filtering: `CellQuery`'s wire request now sends
+`with_data: Some(true)` explicitly rather than relying on an unstated indexer
+default, and a cell whose `output_data` the node did not return is treated as
+unknown-and-excluded, never as confirmed-empty-and-accepted — a cell can fail
+to be selected this way, which fails closed (a smaller apparent balance)
+rather than open.
+
+**§7.2's fee property test needed an oracle independent of the function it
+tests, and the spec's own wording was the thing that caught the gap.**
+§7.2 requires the fee to be checked against `measured_size × rate`
+independently; an initial version compared `plan.fee` against a call back into
+`fee_for(plan.size, req.fee_rate)`, which is `build_transfer`'s own internal
+call restated — a tautology that cannot detect a rounding-direction bug in
+`fee_for`, the exact class of bug this test exists to catch. Forcing `fee_for`
+to floor instead of `div_ceil` produced zero failures under that oracle. The
+test now asserts the relation directly, `plan.fee * 1000 >= plan.size * rate`
+in `u128`, with no call into `fee_for` at all — which is exactly §7.2's
+sentence turned into an assertion, and which fails immediately (468 of 469
+generated cases) when `fee_for` is forced to floor.
+
+**§7 gained a signing entry point §7 did not name: `WalletCore::send`
+replaces `SigningCoordinator`.** `SigningCoordinator` (from plan 1c) is
+removed rather than kept alongside `send`: a public "sign whatever request I
+hand you" surface over an unlocked vault is a foot-gun once a caller can ask
+the wallet to build and sign its own transfer, and `send` is the single
+signing entry point §7 already describes in spirit.
+
+**§5's fee model prices bytes; CKB prices weight, and the cycle axis is
+unmeasured.** `fee.rs` argued that measuring the transaction exactly removes
+the under-count class outright, so the customary 20% margin "buys nothing".
+That is true on the serialisation axis and only there. A pool orders
+transactions by `get_transaction_weight(tx_size, cycles) = max(tx_size, cycles
+× 0.000_170_571_4)` (`ckb-types-1.1.1/src/core/tx_pool.rs:298`, the constant
+at line 279), so a transaction whose script cycles outweigh its bytes is
+priced on cycles — a quantity `tx-builder` cannot measure, having by design no
+script VM and no backend.
+
+For secp256k1 the size term wins in the shapes this crate builds, but not by
+a comfortable margin: the exact-landing no-change transfer is 355 bytes
+against a cycle weight roughly in the 290–410 range, and nothing pins secp's
+real cycle count because nothing here can. For the Falcon and ML-DSA locks
+§4.1 exists to generalise to, verification cycles dominate and a size-derived
+fee under-pays. The behaviour is unchanged and the documentation now says
+which axis is eliminated and which is not; the measurement that would settle
+it is the live broadcast, which should record the `cycles` a node reports from
+`get_transaction` — that number is what a cycle-aware fee model must be built
+against.
+
+**What is not proven.** Every claim above is checked against a pure function,
+a recorded testnet vector, or an independent encoder — never a broadcast. No
+transaction produced by this crate and `wallet-core::send` has been submitted
+to a live node or accepted by a pool; `crates/wallet-core/tests/live_send.rs`
+exists, is gated behind `#[ignore]` and an environment variable, and has not
+been run, because no funded secp256k1 testnet key is available to this
+project's automation. This remains true until someone runs it by hand with a
+funded key, per §8.

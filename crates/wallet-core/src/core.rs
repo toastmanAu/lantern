@@ -1,10 +1,15 @@
 //! The orchestrator.
 //!
-//! Owns the unlocked vault, the account registry, the lock modules, and
-//! the active network. `SigningCoordinator` is the one signing entry
-//! point (spec §7); it dispatches through `LockModule` and never names a
-//! scheme. Synchronous in plan 1c; plan 1e turns it into the async
-//! `sign(tx)` when device signers and submission exist.
+//! Owns the unlocked vault, the account registry, the lock modules, and the
+//! active network, and is where every side effect lives: fetching candidate
+//! cells, dispatching to a `LockModule`, and broadcasting. `tx-builder` stays
+//! pure by receiving what this module resolves.
+//!
+//! [`WalletCore::send`] is the one signing entry point (spec §7). It builds
+//! the `SigningRequest` itself from a real `TransferPlan`, so nothing outside
+//! this crate can hand the vault a transaction of its own choosing, and it
+//! exposes the seed exactly once per send no matter how many script groups
+//! the plan contains.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,17 +17,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lantern_account_registry::{
     AccountRegistry, StoredAccount, WalletOrigin, account_id, to_record,
 };
-use lantern_chain_backend::{
-    BackendError, BackendManager, ChainBackend, H256, JsonBytes, Script, ScriptHashType,
-    WatchedScript,
-};
-use lantern_sdk_schema::{AccountRecord, Derivation, LockType, Network};
+use lantern_chain_backend::{BackendError, BackendManager, ChainBackend, H256, WatchedScript};
+use lantern_sdk_schema::{AccountRecord, Derivation, LockType, Network, SigningRequest};
+use lantern_tx_builder::TransferRequest;
 use lantern_vault::{ExposeSecret, Vault};
 
 use crate::error::CoreError;
 use crate::keyring::Keyring;
 use crate::locks::LockRegistry;
 use crate::mnemonic::{MnemonicFormat, Phrase, WordCount};
+use crate::send::{apply_witnesses, collect_candidates, decode_address, lock_script_for};
 
 /// Where a profile keeps its two files. Resolving the OS data directory
 /// is the Tauri shell's job (plan 1f).
@@ -323,8 +327,119 @@ impl WalletCore {
         self.vault.lock();
     }
 
-    pub const fn signer(&self) -> SigningCoordinator<'_> {
-        SigningCoordinator { core: self }
+    /// Build, sign and broadcast a transfer from one account.
+    ///
+    /// The whole side-effecting path in one place: page the account's cells
+    /// out of the backend, hand them to the pure builder, dispatch the plan to
+    /// the account's lock module, splice the witnesses it returns back into
+    /// the transaction, and broadcast.
+    ///
+    /// The seed is read once and handed over once, covering every script group
+    /// in the plan, so the number of exposures does not grow with the number
+    /// of inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::AccountNotFound`] if `account_id` is not
+    /// registered, [`CoreError::NoSigningMaterial`] if it carries no
+    /// derivation, [`CoreError::Registry`] if `recipient` is not a valid
+    /// address on this wallet's network, [`CoreError::Backend`] if the chain
+    /// is unreachable or no backend is attached, [`CoreError::Build`] if the
+    /// transfer cannot be constructed, [`CoreError::Lock`] if the module
+    /// refuses to sign, and [`CoreError::WitnessOutOfRange`] if the module
+    /// returns a witness outside the groups it was asked to sign.
+    pub async fn send(
+        &mut self,
+        account_id: &str,
+        recipient: &str,
+        amount: u64,
+    ) -> Result<H256, CoreError> {
+        let account = self
+            .accounts
+            .get(account_id)
+            .ok_or(CoreError::AccountNotFound)?
+            .clone();
+        let module = self.locks.get(account.lock_type)?;
+        // The builder fills `SigningGroup.derivation` from this, and the
+        // module derives its key from that. An account with none cannot sign
+        // at all, so refuse before a transaction exists.
+        let derivation = account.derivation.ok_or(CoreError::NoSigningMaterial)?;
+        let backend = self
+            .backend
+            .as_ref()
+            .and_then(BackendManager::current_backend)
+            .ok_or(CoreError::Backend(BackendError::NotReady))?;
+
+        // Decoded before anything touches the network: a mistyped or
+        // wrong-chain address is the most likely failure here, and paying for
+        // a full cell scan to discover it is wasted latency.
+        let recipient = decode_address(recipient, self.network)?;
+        let change_lock = lock_script_for(&account, module)?;
+
+        // `current_backend()` hands back whatever is active, not whatever is
+        // ready, so ask. Be precise about what this catches, because it is
+        // narrower than "the index is complete":
+        //
+        // `is_usable()` is `Synced | Syncing`, so what it REFUSES is
+        // `Connecting`, `Error` and `Stopped` — a backend that is not
+        // reachable yet, one whose last probe failed, one that has been shut
+        // down, and (for a light client, whose `Connecting` means
+        // `filter_progress()` returned `None`) one that has been asked to
+        // watch nothing at all. That last case is the one worth having: a
+        // light client with no registered scripts indexes nothing for us, so
+        // `get_cells` is guaranteed to answer nothing however funded the
+        // wallet is, and everything downstream would report no spendable
+        // cells — a lie told confidently. Plan 1d's supervised-restart bug,
+        // where a rebuilt `EmbeddedLight` loses its registration list, lands
+        // here too (spec §8 predicted it).
+        //
+        // What it does NOT catch: a REGISTERED light client that is still
+        // fetching filters reports `Syncing` and passes. Its candidate set is
+        // genuinely partial, so `InsufficientFunds` over a funded wallet
+        // remains reachable, as does a lagging index serving a cell that is
+        // already spent. `is_usable()` admitting `Syncing` is plan 1d's
+        // design (`sdk-schema/src/backend.rs`), not something this call site
+        // decides; narrowing the send path to `Synced` alone is a plan 1f
+        // decision and a behavioural change, not a comment.
+        let status = backend.status().await;
+        if !status.is_usable() {
+            return Err(CoreError::BackendNotUsable { status });
+        }
+
+        let candidates = collect_candidates(backend, &change_lock).await?;
+        let request = TransferRequest {
+            candidates,
+            recipient,
+            amount,
+            change_lock,
+            // Read from the resolved module, never assumed. `tx-builder`
+            // cannot depend on the signer crate, so this is the only place the
+            // placeholder the builder writes and the placeholder the module
+            // demands can be made the same object. The secp256k1 module
+            // refuses to sign a group whose first slot is not byte-for-byte
+            // its own placeholder, so a mismatch fails loudly here rather than
+            // as a -52 on chain.
+            witness_size: module.witness_size(),
+            derivation,
+            cell_deps: module.cell_deps(self.network),
+            fee_rate: lantern_tx_builder::DEFAULT_FEE_RATE,
+        };
+        let plan = lantern_tx_builder::build_transfer(&request)?;
+
+        let signing = SigningRequest {
+            tx: plan.tx.clone(),
+            inputs: plan.inputs,
+            groups: plan.groups,
+        };
+        let seed = Keyring::seed_for(&self.vault, module.seed_kind())?;
+        let witnesses = module.sign(seed.expose_secret(), &signing).await?;
+        drop(seed);
+
+        let signed = apply_witnesses(plan.tx, &signing, witnesses)?;
+        backend
+            .send_transaction(&signed.into())
+            .await
+            .map_err(Into::into)
     }
 
     /// Adopt a backend manager. The manager owns the active backend; the
@@ -398,25 +513,8 @@ impl WalletCore {
         let mut watched = Vec::new();
         for account in self.accounts.list() {
             let module = self.locks.get(account.lock_type)?;
-            let template = module.script_template();
-            let hash_type = match template.hash_type {
-                0 => ScriptHashType::Data,
-                1 => ScriptHashType::Type,
-                2 => ScriptHashType::Data1,
-                4 => ScriptHashType::Data2,
-                _ => {
-                    return Err(CoreError::Backend(BackendError::Unsupported(
-                        "unknown script hash type",
-                    )));
-                }
-            };
-            let script = Script {
-                code_hash: H256(template.code_hash),
-                hash_type,
-                args: JsonBytes::from_vec(account.lock_args.clone()),
-            };
             watched.push(WatchedScript::lock(
-                script,
+                lock_script_for(account, module)?,
                 account.watch_from_block.unwrap_or(0),
             ));
         }
@@ -426,35 +524,16 @@ impl WalletCore {
     }
 }
 
-/// The single signing entry point.
-pub struct SigningCoordinator<'a> {
-    core: &'a WalletCore,
-}
-
-impl SigningCoordinator<'_> {
-    /// Sign a 32-byte digest for `account_id`. Returns the witness lock bytes.
-    pub fn sign_digest(&self, account_id: &str, digest: &[u8; 32]) -> Result<Vec<u8>, CoreError> {
-        let account = self
-            .core
-            .accounts
-            .get(account_id)
-            .ok_or(CoreError::AccountNotFound)?;
-        let module = self.core.locks.get(account.lock_type)?;
-        let derivation = account.derivation.ok_or(CoreError::NoSigningMaterial)?;
-        let seed = Keyring::seed_for(&self.core.vault, module.seed_kind())?;
-        module
-            .sign_digest(seed.expose_secret(), &derivation, digest)
-            .map_err(CoreError::from)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use async_trait::async_trait;
+    use lantern_chain_backend::{BackendManager, testing::FakeNode};
     use lantern_sdk_schema::{
-        AccountCapabilities, Derivation, LockError, LockModule, LockType, Network, ScriptTemplate,
-        SeedKind,
+        AccountCapabilities, AccountRecord, CellDep, Derivation, LockError, LockModule, LockType,
+        Network, ScriptTemplate, SeedKind, SignedWitness, SigningGroup, SigningRequest,
+        WitnessSize,
     };
     use tempfile::tempdir;
 
@@ -463,11 +542,18 @@ mod tests {
     use crate::locks::LockRegistry;
     use crate::mnemonic::WordCount;
 
+    const SHANNONS_PER_CKB: u64 = 100_000_000;
+    const BROADCAST_HASH: &str =
+        "0x8c94af53085ba511b1acba1fadd8d8215b45021f90fec7bf977687b6ee2103f1";
+    /// The fake node's chain tip, and the height its filter sync has reached.
+    const TIP: &str = "0x1554ef4";
+
     struct FakeLock {
         kind: SeedKind,
         seen: Arc<Mutex<Vec<usize>>>,
     }
 
+    #[async_trait]
     impl LockModule for FakeLock {
         fn lock_type(&self) -> LockType {
             LockType::Secp256k1Blake160
@@ -490,22 +576,32 @@ mod tests {
         fn seed_kind(&self) -> SeedKind {
             self.kind
         }
-        fn witness_lock_len(&self) -> usize {
-            1
+        fn witness_size(&self) -> WitnessSize {
+            WitnessSize::Fixed(1)
+        }
+        fn cell_deps(&self, _: Network) -> Vec<CellDep> {
+            Vec::new()
         }
         fn derive_lock_args(&self, seed: &[u8], d: &Derivation) -> Result<Vec<u8>, LockError> {
             self.seen.lock().expect("mutex").push(seed.len());
             let tag = u8::try_from(d.index).unwrap_or(u8::MAX);
             Ok(vec![tag; 20])
         }
-        fn sign_digest(
+        async fn sign(
             &self,
             seed: &[u8],
-            _: &Derivation,
-            digest: &[u8; 32],
-        ) -> Result<Vec<u8>, LockError> {
+            req: &SigningRequest,
+        ) -> Result<Vec<SignedWitness>, LockError> {
             self.seen.lock().expect("mutex").push(seed.len());
-            Ok(digest.to_vec())
+            Ok(req
+                .groups
+                .iter()
+                .filter_map(SigningGroup::witness_index)
+                .map(|index| SignedWitness {
+                    index,
+                    witness: vec![0xAB],
+                })
+                .collect())
         }
     }
 
@@ -519,40 +615,161 @@ mod tests {
         (registry, seen)
     }
 
-    #[tokio::test]
-    async fn coordinator_hands_raw_entropy_to_a_pq_shaped_module() {
+    fn node_info() -> serde_json::Value {
+        serde_json::json!({
+            "version": "0.5.5", "node_id": "QmTestNode", "active": true,
+            "addresses": [], "protocols": [], "connections": "0x0"
+        })
+    }
+
+    /// A light client's tip, and its filter progress for `lock_args` at that
+    /// same height — i.e. fully synced for this wallet's one script.
+    ///
+    /// `send` gates on [`lantern_sdk_schema::BackendStatus::is_usable`], and a
+    /// light backend derives that by comparing `get_tip_header` against the
+    /// `get_scripts` row for a script it has registered. A fixture missing
+    /// either answer reports `Error` or `Connecting` and is refused before a
+    /// cell is ever fetched.
+    fn tip_header() -> serde_json::Value {
+        serde_json::json!({
+            "compact_target": "0x1a08a97e", "dao": format!("0x{}", "00".repeat(32)),
+            "epoch": "0x1", "extra_hash": format!("0x{}", "00".repeat(32)),
+            "hash": format!("0x{}", "01".repeat(32)),
+            "nonce": "0x0", "number": TIP,
+            "parent_hash": format!("0x{}", "00".repeat(32)),
+            "proposals_hash": format!("0x{}", "00".repeat(32)),
+            "timestamp": "0x1", "transactions_root": format!("0x{}", "00".repeat(32)),
+            "version": "0x0"
+        })
+    }
+
+    fn scripts_at_tip(lock_args: &str) -> serde_json::Value {
+        serde_json::json!([{
+            "script": {
+                "code_hash": format!("0x{}", "11".repeat(32)),
+                "hash_type": "type",
+                "args": lock_args
+            },
+            "script_type": "lock",
+            "block_number": TIP
+        }])
+    }
+
+    /// A `get_cells` reply holding one spendable cell under `lock_args`,
+    /// exhausting in a single page.
+    fn one_cell(lock_args: &str, capacity: u64) -> serde_json::Value {
+        serde_json::json!({
+            "objects": [{
+                "block_number": "0x1554e00",
+                "out_point": { "index": "0x0", "tx_hash": format!("0x{}", "d1".repeat(32)) },
+                "output": {
+                    "capacity": format!("{capacity:#x}"),
+                    "lock": {
+                        "code_hash": format!("0x{}", "11".repeat(32)),
+                        "hash_type": "type",
+                        "args": lock_args
+                    },
+                    "type": null
+                },
+                "output_data": "0x",
+                "tx_index": "0x1"
+            }],
+            "last_cursor": "0x"
+        })
+    }
+
+    async fn manager_for(dir: &std::path::Path, url: String) -> BackendManager {
+        let mut manager = BackendManager::open(dir.join("backends.json")).expect("manager");
+        manager
+            .add_profile(lantern_sdk_schema::BackendProfile {
+                id: "fake".into(),
+                label: "fake".into(),
+                network: Network::Testnet,
+                kind: lantern_sdk_schema::BackendKind::RemoteLight,
+                endpoint: Some(url),
+            })
+            .expect("adds");
+        manager.activate("fake").await.expect("activates");
+        manager
+    }
+
+    /// Drive a whole `send` against a `FakeLock`, and report the seed lengths
+    /// the module was handed, in order.
+    ///
+    /// Through `send` rather than through a hand-built `SigningRequest`: the
+    /// property under test is that the *real* path asks `Keyring` for exactly
+    /// the material `seed_kind()` names, which a test that called the module
+    /// itself could not observe.
+    async fn seed_lengths_across_a_send(
+        kind: SeedKind,
+        words: WordCount,
+    ) -> (AccountRecord, Vec<usize>) {
         let dir = tempdir().expect("tempdir");
-        let (locks, seen) = fake_registry(SeedKind::RawEntropy);
+        let (locks, seen) = fake_registry(kind);
         let (core, _phrase) = WalletCore::create(
             ProfilePaths::in_dir(dir.path()),
             b"pw",
             Network::Testnet,
-            WordCount::Words24,
+            words,
         )
         .expect("creates");
         let mut core = core.with_locks(locks);
-        let record = core.create_account("pq").await.expect("creates account");
-        assert_eq!(record.extension_id, "test.fake");
-        core.signer()
-            .sign_digest(&record.id, &[0u8; 32])
-            .expect("signs");
-        assert_eq!(*seen.lock().expect("mutex"), vec![32, 32]);
+        let record = core.create_account("one").await.expect("creates account");
+        let args = record.public_metadata["lockArgs"]
+            .as_str()
+            .expect("lockArgs")
+            .to_string();
+
+        let node = FakeNode::builder()
+            .respond("local_node_info", node_info())
+            .respond("get_tip_header", tip_header())
+            .respond("get_scripts", scripts_at_tip(&args))
+            .respond("set_scripts", serde_json::json!(null))
+            .respond("get_cells", one_cell(&args, 1000 * SHANNONS_PER_CKB))
+            .respond("send_transaction", serde_json::json!(BROADCAST_HASH))
+            .start()
+            .await;
+        core.attach_backend(manager_for(dir.path(), node.url()).await)
+            .expect("same network");
+        // Registration first, as a real launch does it: a light client that
+        // has been asked to watch nothing reports `Connecting`, and `send`
+        // refuses an unusable backend rather than scanning an index that is
+        // guaranteed to be empty.
+        core.sync_watched_scripts().await.expect("registers");
+        // A self-transfer: `FakeLock`'s own template round-trips through the
+        // address the registry rendered for it, so no second fixture is needed.
+        core.send(&record.id, &record.address, 100 * SHANNONS_PER_CKB)
+            .await
+            .expect("sends");
+
+        let lengths = seen.lock().expect("mutex").clone();
+        (record, lengths)
     }
 
     #[tokio::test]
-    async fn coordinator_hands_the_bip39_seed_to_a_bip32_module() {
-        let dir = tempdir().expect("tempdir");
-        let (locks, seen) = fake_registry(SeedKind::Bip39Seed);
-        let (core, _phrase) = WalletCore::create(
-            ProfilePaths::in_dir(dir.path()),
-            b"pw",
-            Network::Testnet,
-            WordCount::Words12,
-        )
-        .expect("creates");
-        let mut core = core.with_locks(locks);
-        core.create_account("hd").await.expect("creates account");
-        assert_eq!(*seen.lock().expect("mutex"), vec![64]);
+    async fn sending_hands_raw_entropy_to_a_pq_shaped_module() {
+        let (record, lengths) =
+            seed_lengths_across_a_send(SeedKind::RawEntropy, WordCount::Words24).await;
+        assert_eq!(record.extension_id, "test.fake");
+        assert_eq!(
+            lengths,
+            vec![32, 32],
+            "24 words is 32 bytes of entropy, handed once to derive the \
+             account and once to sign"
+        );
+    }
+
+    #[tokio::test]
+    async fn sending_hands_the_bip39_seed_to_a_bip32_module() {
+        let (_, lengths) =
+            seed_lengths_across_a_send(SeedKind::Bip39Seed, WordCount::Words12).await;
+        assert_eq!(
+            lengths,
+            vec![64, 64],
+            "a BIP39 seed is 64 bytes whatever the word count, and the same \
+             12-word wallet would yield 16 bytes of raw entropy — so this \
+             cannot pass if `send` ignored `seed_kind()`"
+        );
     }
 
     #[tokio::test]
