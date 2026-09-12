@@ -2330,6 +2330,8 @@ dependencies = [
 name = "lantern-sdk-schema"
 version = "0.0.3"
 dependencies = [
+ "ckb-jsonrpc-types",
+ "ckb-types",
  "serde",
  "serde_json",
  "specta",

@@ -12,6 +12,8 @@ description = "Lantern SDK schemas — shared types exported to TS via tauri-spe
 workspace = true
 
 [dependencies]
+ckb-jsonrpc-types.workspace = true
+ckb-types.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 specta = { workspace = true, features = ["derive", "serde", "serde_json"] }
