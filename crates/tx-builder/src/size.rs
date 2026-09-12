@@ -9,25 +9,49 @@
 
 use ckb_types::packed::Transaction;
 
-/// Practical ceiling on a single transaction's serialised size.
+/// The largest transaction a CKB tx-pool will accept, in serialised bytes.
 ///
-/// Provenance: `MAX_BLOCK_BYTES` in
-/// `ckb-chain-spec-1.1.1/src/consensus.rs:83`
+/// Provenance: `TRANSACTION_SIZE_LIMIT` in
+/// `ckb-types-1.1.1/src/core/tx_pool.rs:309`
 /// (`~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`),
-/// `pub const MAX_BLOCK_BYTES: u64 = TWO_IN_TWO_OUT_BYTES * TWO_IN_TWO_OUT_COUNT`
-/// = 597 * `1_000` = `597_000`. Confirmed against RFC 0020 (vendored at
-/// `research/ckb-ecosystem-locks/raw/rfcs/rfcs/0020-ckb-consensus-protocol/`,
-/// line 366: `| block size limit | MAX_BLOCK_BYTES | 597000 |`).
+/// `pub const TRANSACTION_SIZE_LIMIT: u64 = 512 * 1_000`. Not restated:
+/// referenced through the same `ckb-types` this crate already depends on, so
+/// a version bump that moved it would fail to compile rather than leave a
+/// stale number behind.
 ///
-/// This governs the maximum serialised **block** size, not a transaction —
-/// searching the vendored research tree and the pinned `ckb-chain-spec`
-/// and `ckb-constant` crates (both at workspace-pinned version 1.1.1) turned
-/// up no dedicated per-transaction consensus byte ceiling; CKB consensus
-/// scripts do not enforce one directly. `MAX_BLOCK_BYTES` is the nearest
-/// real limit: any single transaction that will ever be included in a block
-/// must fit under it, so it is a correct (if loose) practical ceiling, not
-/// a cited per-tx consensus rule. Treat this as a conservative upper bound.
-pub const MAX_TX_SIZE: usize = 597_000;
+/// Its own doc comment states the semantics exactly: *"The maximum size of
+/// the tx-pool to accept transactions. The ckb consensus does not limit the
+/// size of a single transaction, but if the size of the transaction is close
+/// to the limit of the block, it may cause the transaction to fail to be
+/// packed."*
+///
+/// Note on consensus: there is indeed **no per-transaction consensus byte
+/// ceiling**. The nearest consensus figure is `MAX_BLOCK_BYTES` — 597,000,
+/// `ckb-chain-spec-1.1.1/src/consensus.rs:83`, RFC 0020's `| block size
+/// limit | MAX_BLOCK_BYTES | 597000 |` — which bounds a whole *block*. So
+/// there are two real limits, and the pool's is the tighter one: a
+/// transaction over 512,000 bytes is refused entry to the pool and therefore
+/// never reaches a block at all, whatever consensus would have permitted. We
+/// guard at the tighter one, because the first thing a broadcast meets is
+/// the pool.
+///
+/// The remaining caveat is in the other direction: a node operator can
+/// configure a *lower* `max_tx_size`, which this crate cannot see, so
+/// [`crate::BuildError::TransactionTooLarge`] is a necessary condition for
+/// acceptance and not a sufficient one.
+///
+/// The cast is `u64 -> usize`. `usize::try_from` is not available in a
+/// `const`, so the bound is checked by the const block instead: a target
+/// where the limit did not fit fails to compile rather than wrapping to a
+/// smaller ceiling.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the const assertion in the initialiser rules it out at compile time"
+)]
+pub const MAX_TX_SIZE: usize = {
+    const { assert!(ckb_types::core::tx_pool::TRANSACTION_SIZE_LIMIT <= usize::MAX as u64) };
+    ckb_types::core::tx_pool::TRANSACTION_SIZE_LIMIT as usize
+};
 
 /// Serialised size as the pool measures it.
 ///
@@ -53,9 +77,33 @@ pub fn measure(tx: &Transaction) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::measure;
+    use super::{MAX_TX_SIZE, measure};
     use ckb_types::packed::Transaction;
     use ckb_types::prelude::*;
+
+    #[test]
+    fn the_size_ceiling_is_the_tx_pools_limit_and_is_tighter_than_a_blocks() {
+        // `MAX_BLOCK_BYTES`, 597_000, `ckb-chain-spec-1.1.1/src/consensus.rs:83`
+        // and RFC 0020's `| block size limit | MAX_BLOCK_BYTES | 597000 |`.
+        // It bounds a whole BLOCK; the pool's limit bounds one transaction.
+        const MAX_BLOCK_BYTES: usize = 597_000;
+
+        // The literal is restated here deliberately rather than compared back
+        // to the constant it is defined from, which would assert nothing: a
+        // `ckb-types` bump that moved `TRANSACTION_SIZE_LIMIT` should fail
+        // here and be looked at, not be adopted silently.
+        assert_eq!(MAX_TX_SIZE, 512_000);
+
+        // And it must stay the tighter of the two real limits: a transaction
+        // between them would clear consensus and still never be relayed,
+        // because the pool refuses it first.
+        const {
+            assert!(
+                MAX_TX_SIZE < MAX_BLOCK_BYTES,
+                "guarding at the block ceiling would admit transactions no pool accepts"
+            );
+        }
+    }
 
     #[test]
     fn a_default_transaction_measures_to_seventy_two_bytes() {

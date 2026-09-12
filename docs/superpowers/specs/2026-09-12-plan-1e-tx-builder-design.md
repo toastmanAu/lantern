@@ -361,17 +361,39 @@ implementation and settled by controller ruling during the plan's execution
 changes §1's goals or §9's decisions; each is recorded here because a spec
 that claims to match reality earns its authority by being checked.
 
-**§3.3's size ceiling was cited wrong, and the module no longer restates the
-formula.** `MAX_TX_SIZE` is `597_000` (`MAX_BLOCK_BYTES` from
-`ckb-chain-spec`), not the `512_000` this document originally implied — a
-search of the pinned crates and the vendored research corpus found no reachable
-provenance for `512_000`, and CKB has no per-transaction consensus size limit
-at all; `MAX_BLOCK_BYTES` is a block-level bound applied here as the only true
-upper bound available. The caveat that follows from that: a transaction
-between `512_000` and `597_000` bytes could pass this crate's guard and still
-be refused by a node-config `tx-pool` limit this crate cannot see, so
-`TransactionTooLarge` is not a complete account of size rejection — unreached
-in plan 1e, where a plain transfer is on the order of 1 KB.
+**§3.3's size ceiling: this document was right, an intermediate ruling was
+wrong, and the module no longer restates the formula.** `MAX_TX_SIZE` is
+`512_000` — `ckb_types::core::tx_pool::TRANSACTION_SIZE_LIMIT`,
+`ckb-types-1.1.1/src/core/tx_pool.rs:309`, referenced through the `ckb-types`
+`tx-builder` already depends on rather than copied as a literal.
+
+An earlier ruling during implementation set the constant to `597_000`
+(`MAX_BLOCK_BYTES`) on the stated premise that `512_000` had *no reachable
+provenance in the pinned crates*. That premise was false. The constant was
+there the whole time, in a crate already in this crate's dependency graph, and
+its own doc comment states the semantics we want exactly: "The maximum size of
+the tx-pool to accept transactions. The ckb consensus does not limit the size
+of a single transaction, but if the size of the transaction is close to the
+limit of the block, it may cause the transaction to fail to be packed." The
+search that reported nothing looked at `ckb-chain-spec` and `ckb-constant` and
+did not look at `ckb-types`; the ruling that followed it is recorded here as
+mistaken rather than quietly reversed, because a spec's authority comes from
+being checked and this is the check.
+
+What survives from that reasoning is the observation, which is correct and
+worth keeping: **CKB consensus imposes no per-transaction byte ceiling.**
+There are two real limits and neither is a per-transaction consensus rule —
+`MAX_BLOCK_BYTES` (`597_000`, `ckb-chain-spec-1.1.1/src/consensus.rs:83`,
+RFC 0020) bounds a whole block, and `TRANSACTION_SIZE_LIMIT` bounds what a
+pool will accept. The pool's is the tighter one and it is the first thing a
+broadcast meets, so that is where we guard: a transaction above it never
+reaches a block at all, whatever consensus would have allowed.
+
+The caveat that remains points the other way. A node operator can configure a
+*lower* `max_tx_size` than the default, which this crate cannot see, so
+`TransactionTooLarge` is a necessary condition for acceptance and not a
+sufficient one — unreached in plan 1e either way, where a plain transfer is on
+the order of 1 KB.
 
 Separately, `size.rs`'s `measure` does not build the sum §3.3 describes
 (`.as_slice().len() + 4`). It delegates to
