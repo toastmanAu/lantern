@@ -13,6 +13,9 @@ pub mod error;
 pub mod keyring;
 pub mod locks;
 pub mod mnemonic;
+// Private: `send`'s helpers are implementation detail of
+// `WalletCore::send`, and nothing outside this crate calls them.
+mod send;
 
 pub use core::{ProfilePaths, WalletCore};
 pub use error::CoreError;
