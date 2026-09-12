@@ -9,13 +9,17 @@
 #![forbid(unsafe_code)]
 
 pub mod capacity;
+pub mod error;
 pub mod fee;
 pub mod select;
 pub mod size;
+pub mod types;
 pub mod witness;
 
 pub use capacity::{SHANNONS_PER_CKB, min_capacity, script_occupied_bytes};
+pub use error::BuildError;
 pub use fee::{DEFAULT_FEE_RATE, fee_for};
 pub use select::{Candidate, order_candidates};
 pub use size::{MAX_TX_SIZE, measure};
+pub use types::{TransferPlan, TransferRequest};
 pub use witness::{EMPTY_WITNESS, placeholder_witness};
