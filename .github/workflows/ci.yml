@@ -57,6 +57,9 @@ jobs:
       - name: cargo test (chain-backend, no-default-features build guard)
         run: cargo test -p lantern-chain-backend
 
+      - name: cargo test (tx-builder)
+        run: cargo test -p lantern-tx-builder
+
   frontend:
     name: Frontend workspace
     runs-on: ubuntu-24.04
