@@ -50,17 +50,17 @@ impl Candidate for InputContext {
         self.capacity
     }
 
-    fn tie_break(&self) -> &[u8] {
-        // The out point's tx hash: stable (a 32-byte view borrowed straight
-        // from `self`, so it never allocates) and deterministic across runs.
-        // It does not distinguish two candidates that are different outputs
-        // of the *same* transaction (equal tx_hash, different index) — an
-        // owned tx_hash+index composite would, but `Candidate::tie_break`
-        // returns `&[u8]` borrowed from `self`, and `InputContext` (Task 7,
-        // sdk-schema) has no field already holding that concatenation. Two
-        // same-tx candidates colliding here only matters when their
-        // capacities also tie, and `order_candidates`'s sort is stable, so
-        // the result stays deterministic for a given input order even then.
-        self.out_point.tx_hash.as_bytes()
+    fn tie_break(&self) -> (&[u8], u32) {
+        // (tx_hash, index) is exactly what identifies an `OutPoint`, so this
+        // is a genuine total order: two distinct out points always differ
+        // in at least one of the two. tx_hash alone is not enough — two
+        // outputs of the same transaction (equal tx_hash, different index)
+        // would otherwise tie, which is an ordinary shape (a wallet
+        // splitting change into two equal cells, or a batch payment with
+        // two equal outputs to one address).
+        (
+            self.out_point.tx_hash.as_bytes(),
+            self.out_point.index.value(),
+        )
     }
 }

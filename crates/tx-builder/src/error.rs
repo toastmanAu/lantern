@@ -66,4 +66,35 @@ mod tests {
             "{text}"
         );
     }
+
+    #[test]
+    fn amount_below_floor_names_the_amount_and_the_floor() {
+        let e = BuildError::AmountBelowFloor {
+            amount: 500_000_000,
+            floor: 6_100_000_000,
+        };
+        let text = e.to_string();
+        assert!(text.contains("500000000"), "amount must be stated: {text}");
+        assert!(text.contains("6100000000"), "floor must be stated: {text}");
+    }
+
+    #[test]
+    fn transaction_too_large_names_the_size_and_the_limit() {
+        let e = BuildError::TransactionTooLarge {
+            size: 600_000,
+            limit: 512_000,
+        };
+        let text = e.to_string();
+        assert!(text.contains("600000"), "size must be stated: {text}");
+        assert!(text.contains("512000"), "limit must be stated: {text}");
+    }
+
+    #[test]
+    fn no_spendable_cells_states_the_condition() {
+        // No quantity to name here — the honest assertion is that the
+        // message says what's wrong, not that it invents a number.
+        let text = BuildError::NoSpendableCells.to_string();
+        assert!(!text.is_empty());
+        assert!(text.to_lowercase().contains("no spendable cells"), "{text}");
+    }
 }
