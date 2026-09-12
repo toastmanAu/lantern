@@ -11,10 +11,12 @@
 //!
 //! `GOLDEN` was NOT produced by printing `plan.tx`'s bytes and pasting them
 //! back — that would assert the code agrees with itself and pass against
-//! any bug in the encoder, ordering, or field layout. It was produced by a
-//! hand-written Python molecule encoder
-//! (`research`-adjacent scratch script, not checked into this repo) built
-//! from:
+//! any bug in the encoder, ordering, or field layout. It was produced by
+//! `research/ckb-tx-construction/golden-encoder.py`, a hand-written Python
+//! molecule encoder committed to this repository (run it with
+//! `python3 research/ckb-tx-construction/golden-encoder.py`; its own header
+//! carries the full derivation and the one bug it caught in itself along
+//! the way), built from:
 //!
 //! - RFC 0008 (serialisation): the byte-level rules for `array` / `struct`
 //!   / `fixvec` / `dynvec` / `table` / `option`, at
@@ -30,9 +32,10 @@
 //!
 //! None of those three sources is `ckb-types`, `ckb-jsonrpc-types`, or
 //! anything under `crates/tx-builder` — the encoder shares no code with the
-//! implementation it checks. See `task-15-report.md` for the full script,
-//! its output, and the arithmetic that turned the fixture's inputs into the
-//! expected fee and change.
+//! implementation it checks. If it ever disagrees with `GOLDEN` again, that
+//! disagreement is the signal: re-derive from the spec, not from this
+//! crate — see the script's own header for how that played out the first
+//! time.
 //!
 //! The fixture: one 1000 CKB input, secp-shaped locks (20-byte args, hash
 //! type `Type`), a 100 CKB payment, one cell dep, `DEFAULT_FEE_RATE`
