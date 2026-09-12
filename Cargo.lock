@@ -2330,6 +2330,7 @@ dependencies = [
 name = "lantern-sdk-schema"
 version = "0.0.3"
 dependencies = [
+ "async-trait",
  "ckb-jsonrpc-types",
  "ckb-types",
  "serde",
@@ -2337,6 +2338,7 @@ dependencies = [
  "specta",
  "specta-typescript",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -2367,6 +2369,7 @@ dependencies = [
 name = "lantern-signer-secp256k1"
 version = "0.0.3"
 dependencies = [
+ "async-trait",
  "ckb-hash",
  "hex",
  "hmac",
@@ -2413,7 +2416,9 @@ dependencies = [
 name = "lantern-wallet-core"
 version = "0.0.3"
 dependencies = [
+ "async-trait",
  "bip39",
+ "ckb-types",
  "hex",
  "lantern-account-registry",
  "lantern-chain-backend",

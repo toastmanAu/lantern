@@ -2,7 +2,10 @@
 //! implements `LockModule`; `wallet-core` dispatches through it and never
 //! names a concrete scheme.
 
+use async_trait::async_trait;
+
 use crate::error::LockError;
+use crate::signing::{SignedWitness, SigningRequest};
 use crate::types::{AccountCapabilities, Derivation, LockType};
 
 /// The script a lock module's accounts are locked by. `hash_type` follows
@@ -51,8 +54,8 @@ impl WitnessSize {
 /// Object-safe contract for a lock family.
 ///
 /// `seed` is a borrowed slice of whatever `seed_kind` asked for. Implementors
-/// must not retain it. `sign_digest` returns the bytes destined for the
-/// witness lock field, whatever size the scheme needs.
+/// must not retain it.
+#[async_trait]
 pub trait LockModule: Send + Sync {
     fn lock_type(&self) -> LockType;
     fn extension_id(&self) -> &'static str;
@@ -62,22 +65,36 @@ pub trait LockModule: Send + Sync {
     /// Size of the witness lock placeholder for fee estimation.
     fn witness_size(&self) -> WitnessSize;
     fn derive_lock_args(&self, seed: &[u8], derivation: &Derivation) -> Result<Vec<u8>, LockError>;
-    fn sign_digest(
+
+    /// Produce witnesses for the groups in `req`.
+    ///
+    /// The module receives every group it owns in a single call, so it
+    /// exposes the seed exactly once no matter how many inputs are being
+    /// signed. Returning a witness for an index outside `req.owned_indices()`
+    /// is a contract violation and the caller rejects it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockError`] if key derivation or signing fails.
+    async fn sign(
         &self,
         seed: &[u8],
-        derivation: &Derivation,
-        digest: &[u8; 32],
-    ) -> Result<Vec<u8>, LockError>;
+        req: &SigningRequest,
+    ) -> Result<Vec<SignedWitness>, LockError>;
 }
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+
     use super::{LockModule, ScriptTemplate, SeedKind, WitnessSize};
     use crate::error::LockError;
+    use crate::signing::{SignedWitness, SigningGroup, SigningRequest};
     use crate::types::{AccountCapabilities, Derivation, LockType};
 
     struct Fake;
 
+    #[async_trait]
     impl LockModule for Fake {
         fn lock_type(&self) -> LockType {
             LockType::Secp256k1Blake160
@@ -106,13 +123,21 @@ mod tests {
         fn derive_lock_args(&self, seed: &[u8], _: &Derivation) -> Result<Vec<u8>, LockError> {
             Ok(seed.to_vec())
         }
-        fn sign_digest(
+
+        async fn sign(
             &self,
             _: &[u8],
-            _: &Derivation,
-            d: &[u8; 32],
-        ) -> Result<Vec<u8>, LockError> {
-            Ok(d.to_vec())
+            req: &SigningRequest,
+        ) -> Result<Vec<SignedWitness>, LockError> {
+            Ok(req
+                .groups
+                .iter()
+                .filter_map(SigningGroup::witness_index)
+                .map(|index| SignedWitness {
+                    index,
+                    witness: vec![0xAB],
+                })
+                .collect())
         }
     }
 
@@ -144,5 +169,25 @@ mod tests {
             Ok(vec![1, 2])
         );
         assert_eq!(module.seed_kind(), SeedKind::RawEntropy);
+    }
+
+    #[tokio::test]
+    async fn a_module_signs_from_a_request_rather_than_a_digest() {
+        let fake = Fake;
+        let req = SigningRequest {
+            tx: ckb_types::packed::Transaction::default(),
+            inputs: Vec::new(),
+            groups: vec![SigningGroup {
+                lock_hash: [0u8; 32],
+                input_indices: vec![0],
+                derivation: Derivation {
+                    change: 0,
+                    index: 0,
+                },
+            }],
+        };
+        let out = fake.sign(b"seed", &req).await.expect("signs");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].index, 0, "the group's witness slot");
     }
 }

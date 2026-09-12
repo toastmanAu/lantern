@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 lantern-sdk-schema = { path = "../sdk-schema" }
+async-trait.workspace = true
 secp256k1.workspace = true
 hmac.workspace = true
 sha2.workspace = true

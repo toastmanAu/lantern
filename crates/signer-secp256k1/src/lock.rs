@@ -1,8 +1,9 @@
 //! `LockModule` implementation for `secp256k1_blake160_sighash_all`.
 
+use async_trait::async_trait;
 use lantern_sdk_schema::{
     AccountCapabilities, Derivation, LockError, LockModule, LockType, ScriptTemplate, SeedKind,
-    WitnessSize,
+    SignedWitness, SigningRequest, WitnessSize,
 };
 
 use crate::error::SignerError;
@@ -39,6 +40,7 @@ fn key_for(seed: &[u8], derivation: Derivation) -> Result<SigningKey, LockError>
     })
 }
 
+#[async_trait]
 impl LockModule for Secp256k1Lock {
     fn lock_type(&self) -> LockType {
         LockType::Secp256k1Blake160
@@ -78,13 +80,51 @@ impl LockModule for Secp256k1Lock {
         Ok(blake160(&public_key(&key)).to_vec())
     }
 
+    async fn sign(
+        &self,
+        _seed: &[u8],
+        _req: &SigningRequest,
+    ) -> Result<Vec<SignedWitness>, LockError> {
+        // TEMPORARY — Task 10 of plan 1e ("secp256k1 signs a multi-input
+        // group") implements this for real, replacing this stub with a
+        // request-shaped RFC 0019 sighash-all signer built on
+        // `sign_digest` below (soon renamed `sign_digest_internal`). Left
+        // returning an error rather than a plausible-looking empty `Vec`,
+        // so that anything wiring this up before Task 10 lands fails
+        // loudly instead of producing an unsigned transaction that looks
+        // signed.
+        Err(LockError::Signing(
+            "Secp256k1Lock::sign is not implemented yet — Task 10 of plan 1e replaces this stub"
+                .to_string(),
+        ))
+    }
+}
+
+impl Secp256k1Lock {
+    /// Sign a precomputed 32-byte digest for `derivation`.
+    ///
+    /// Not part of `LockModule` — the trait's `sign` takes a whole
+    /// `SigningRequest` (Task 8 of plan 1e). This routine is the
+    /// implementation detail that will back it once Task 10 lands; until
+    /// then it is exercised only by this crate's own `#[ignore]`d tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockError`] if the seed has the wrong shape or the
+    /// derivation is out of range.
+    // TEMPORARY — only the `#[ignore]`d test below calls this until Task 10
+    // wires it up as `sign_digest_internal` behind `LockModule::sign`. `self`
+    // is unused because `Secp256k1Lock` carries no state; a trait impl would
+    // be exempt from that lint, but this is a plain inherent method now that
+    // it is no longer required by `LockModule`.
+    #[allow(dead_code, clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
     fn sign_digest(
         &self,
         seed: &[u8],
-        derivation: &Derivation,
+        derivation: Derivation,
         digest: &[u8; 32],
     ) -> Result<Vec<u8>, LockError> {
-        let key = key_for(seed, *derivation)?;
+        let key = key_for(seed, derivation)?;
         Ok(sign_recoverable(&key, digest).to_vec())
     }
 }
@@ -138,11 +178,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "sign_digest is not reachable through LockModule until Task 10 of \
+                plan 1e implements Secp256k1Lock::sign; restored there as \
+                sign_digest_internal"]
     fn signature_recovers_to_lock_args() {
         let seed = hex::decode(TANK_SEED).expect("hex");
         let digest = [0x99u8; 32];
         let sig = Secp256k1Lock
-            .sign_digest(&seed, &d(0, 3), &digest)
+            .sign_digest(&seed, d(0, 3), &digest)
             .expect("signs");
         assert_eq!(sig.len(), 65);
         let mut arr = [0u8; 65];

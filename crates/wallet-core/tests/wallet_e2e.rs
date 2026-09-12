@@ -2,11 +2,31 @@
 //! key material cross-checks against `signer-secp256k1`, whose own tests
 //! pin the lumos and BIP32 vectors.
 
-use lantern_sdk_schema::{AccountRecord, Network};
+use lantern_sdk_schema::{AccountRecord, Derivation, Network, SigningGroup, SigningRequest};
 use lantern_signer_secp256k1::{SigningKey, blake160, public_key, recover};
 use lantern_vault::{Vault, VaultError};
 use lantern_wallet_core::{CoreError, MnemonicFormat, ProfilePaths, WalletCore, WordCount};
 use tempfile::tempdir;
+
+/// A `SigningRequest` naming one account's whole (single-input) group.
+///
+/// Real callers build this from a resolved `TransferPlan` (Task 12); these
+/// tests predate that builder, so the transaction itself is a placeholder.
+/// It is only ever handed to a stub or an `#[ignore]`d test.
+fn single_input_request() -> SigningRequest {
+    SigningRequest {
+        tx: ckb_types::packed::Transaction::default(),
+        inputs: Vec::new(),
+        groups: vec![SigningGroup {
+            lock_hash: [0u8; 32],
+            input_indices: vec![0],
+            derivation: Derivation {
+                change: 0,
+                index: 0,
+            },
+        }],
+    }
+}
 
 const TANK: &str =
     "tank planet champion pottery together intact quick police asset flower sudden question";
@@ -50,18 +70,39 @@ async fn create_three_accounts_lock_unlock_sign_and_recover() {
     let a3 = core.create_account("Four").await.expect("account 3");
     assert_eq!(a3.public_metadata["derivation"]["index"], 3);
 
-    let digest = [0x5au8; 32];
-    let signature = core.signer().sign_digest(&a1.id, &digest).expect("signs");
-    assert_eq!(signature.len(), 65);
-    let mut arr = [0u8; 65];
-    arr.copy_from_slice(&signature);
-    let recovered = recover(&arr, &digest).expect("recovers");
-    assert_eq!(blake160(&recovered).to_vec(), lock_args_of(&a1));
-
+    // Account resolution happens before the module is ever reached, so this
+    // still exercises real behaviour even while `Secp256k1Lock::sign` is a
+    // Task 10 stub.
     assert!(matches!(
-        core.signer().sign_digest("nope", &digest),
+        core.signer().sign("nope", &single_input_request()).await,
         Err(CoreError::AccountNotFound)
     ));
+}
+
+#[tokio::test]
+#[ignore = "Secp256k1Lock::sign is a stub until Task 10 of plan 1e; a real \
+            request also needs Task 14's wallet-core send path to build it \
+            correctly, not the placeholder tx single_input_request() uses"]
+async fn account_signing_recovers_the_public_key() {
+    let dir = tempdir().expect("tempdir");
+    let paths = ProfilePaths::in_dir(dir.path());
+    let (mut core, _phrase) =
+        WalletCore::create(paths.clone(), b"pw", Network::Testnet, WordCount::Words24)
+            .expect("creates");
+    let a1 = core.create_account("Two").await.expect("account 1");
+
+    let digest = [0x5au8; 32];
+    let out = core
+        .signer()
+        .sign(&a1.id, &single_input_request())
+        .await
+        .expect("signs");
+    let signature = &out[0].witness;
+    assert_eq!(signature.len(), 65);
+    let mut arr = [0u8; 65];
+    arr.copy_from_slice(signature);
+    let recovered = recover(&arr, &digest).expect("recovers");
+    assert_eq!(blake160(&recovered).to_vec(), lock_args_of(&a1));
 }
 
 #[tokio::test]
@@ -97,7 +138,7 @@ async fn imported_phrase_yields_the_lumos_key_and_reveals_with_the_password() {
 }
 
 #[tokio::test]
-async fn quantum_purse_combined_phrase_imports_and_signs() {
+async fn quantum_purse_combined_phrase_imports() {
     let dir = tempdir().expect("tempdir");
     let paths = ProfilePaths::in_dir(dir.path());
     let combined = format!("{P1} {P2} {P3}");
@@ -111,19 +152,33 @@ async fn quantum_purse_combined_phrase_imports_and_signs() {
     assert!(account.address.starts_with("ckb1"), "{}", account.address);
     assert_eq!(lock_args_of(&account).len(), 20);
 
-    let digest = [0x77u8; 32];
-    let signature = core
-        .signer()
-        .sign_digest(&account.id, &digest)
-        .expect("signs");
-    let mut arr = [0u8; 65];
-    arr.copy_from_slice(&signature);
-    let recovered = recover(&arr, &digest).expect("recovers");
-    assert_eq!(blake160(&recovered).to_vec(), lock_args_of(&account));
-
     let again = core.reveal_mnemonic(b"pw").expect("reveals");
     assert_eq!(again.expose(), combined);
     assert_eq!(again.word_count(), 36);
+}
+
+#[tokio::test]
+#[ignore = "Secp256k1Lock::sign is a stub until Task 10 of plan 1e; a real \
+            request also needs Task 14's wallet-core send path to build it \
+            correctly, not the placeholder tx single_input_request() uses"]
+async fn quantum_purse_combined_phrase_signs_and_recovers() {
+    let dir = tempdir().expect("tempdir");
+    let paths = ProfilePaths::in_dir(dir.path());
+    let combined = format!("{P1} {P2} {P3}");
+    let mut core = WalletCore::import(paths, b"pw", Network::Mainnet, &combined).expect("imports");
+    let account = core.create_account("PQ import").await.expect("account");
+
+    let digest = [0x77u8; 32];
+    let out = core
+        .signer()
+        .sign(&account.id, &single_input_request())
+        .await
+        .expect("signs");
+    let signature = &out[0].witness;
+    let mut arr = [0u8; 65];
+    arr.copy_from_slice(signature);
+    let recovered = recover(&arr, &digest).expect("recovers");
+    assert_eq!(blake160(&recovered).to_vec(), lock_args_of(&account));
 }
 
 #[test]

@@ -3,8 +3,10 @@
 //! Owns the unlocked vault, the account registry, the lock modules, and
 //! the active network. `SigningCoordinator` is the one signing entry
 //! point (spec §7); it dispatches through `LockModule` and never names a
-//! scheme. Synchronous in plan 1c; plan 1e turns it into the async
-//! `sign(tx)` when device signers and submission exist.
+//! scheme. Synchronous and per-digest in plan 1c; plan 1e's Task 8 makes
+//! it async and request-shaped, matching `LockModule::sign`. Task 14
+//! ("`wallet-core` sends") replaces `SigningCoordinator::sign` with
+//! `WalletCore::send`, which builds the request itself.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,7 +18,9 @@ use lantern_chain_backend::{
     BackendError, BackendManager, ChainBackend, H256, JsonBytes, Script, ScriptHashType,
     WatchedScript,
 };
-use lantern_sdk_schema::{AccountRecord, Derivation, LockType, Network};
+use lantern_sdk_schema::{
+    AccountRecord, Derivation, LockType, Network, SignedWitness, SigningRequest,
+};
 use lantern_vault::{ExposeSecret, Vault};
 
 use crate::error::CoreError;
@@ -432,18 +436,38 @@ pub struct SigningCoordinator<'a> {
 }
 
 impl SigningCoordinator<'_> {
-    /// Sign a 32-byte digest for `account_id`. Returns the witness lock bytes.
-    pub fn sign_digest(&self, account_id: &str, digest: &[u8; 32]) -> Result<Vec<u8>, CoreError> {
+    /// Sign every group in `req` under `account_id`'s lock module.
+    ///
+    /// TEMPORARY surface for plan 1e's in-progress signing path. `req` is
+    /// still supplied whole by the caller here; Task 14 ("`wallet-core`
+    /// sends") replaces this with `WalletCore::send`, which builds `req`
+    /// itself from a real `TransferPlan` rather than taking one ready-made.
+    /// Kept so the account-lookup and lock-resolution plumbing this crate
+    /// already owns stays exercised against `LockModule::sign`'s new,
+    /// request-shaped contract rather than the retired per-digest one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::AccountNotFound`] if `account_id` is not
+    /// registered, [`CoreError::NoSigningMaterial`] if the account has no
+    /// derivation on file, and whatever the resolved [`LockModule::sign`]
+    /// reports.
+    pub async fn sign(
+        &self,
+        account_id: &str,
+        req: &SigningRequest,
+    ) -> Result<Vec<SignedWitness>, CoreError> {
         let account = self
             .core
             .accounts
             .get(account_id)
             .ok_or(CoreError::AccountNotFound)?;
         let module = self.core.locks.get(account.lock_type)?;
-        let derivation = account.derivation.ok_or(CoreError::NoSigningMaterial)?;
+        account.derivation.ok_or(CoreError::NoSigningMaterial)?;
         let seed = Keyring::seed_for(&self.core.vault, module.seed_kind())?;
         module
-            .sign_digest(seed.expose_secret(), &derivation, digest)
+            .sign(seed.expose_secret(), req)
+            .await
             .map_err(CoreError::from)
     }
 }
@@ -452,9 +476,10 @@ impl SigningCoordinator<'_> {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use async_trait::async_trait;
     use lantern_sdk_schema::{
         AccountCapabilities, Derivation, LockError, LockModule, LockType, Network, ScriptTemplate,
-        SeedKind, WitnessSize,
+        SeedKind, SignedWitness, SigningGroup, SigningRequest, WitnessSize,
     };
     use tempfile::tempdir;
 
@@ -468,6 +493,7 @@ mod tests {
         seen: Arc<Mutex<Vec<usize>>>,
     }
 
+    #[async_trait]
     impl LockModule for FakeLock {
         fn lock_type(&self) -> LockType {
             LockType::Secp256k1Blake160
@@ -498,14 +524,21 @@ mod tests {
             let tag = u8::try_from(d.index).unwrap_or(u8::MAX);
             Ok(vec![tag; 20])
         }
-        fn sign_digest(
+        async fn sign(
             &self,
             seed: &[u8],
-            _: &Derivation,
-            digest: &[u8; 32],
-        ) -> Result<Vec<u8>, LockError> {
+            req: &SigningRequest,
+        ) -> Result<Vec<SignedWitness>, LockError> {
             self.seen.lock().expect("mutex").push(seed.len());
-            Ok(digest.to_vec())
+            Ok(req
+                .groups
+                .iter()
+                .filter_map(SigningGroup::witness_index)
+                .map(|index| SignedWitness {
+                    index,
+                    witness: vec![0xAB],
+                })
+                .collect())
         }
     }
 
@@ -533,9 +566,19 @@ mod tests {
         let mut core = core.with_locks(locks);
         let record = core.create_account("pq").await.expect("creates account");
         assert_eq!(record.extension_id, "test.fake");
-        core.signer()
-            .sign_digest(&record.id, &[0u8; 32])
-            .expect("signs");
+        let req = SigningRequest {
+            tx: ckb_types::packed::Transaction::default(),
+            inputs: Vec::new(),
+            groups: vec![SigningGroup {
+                lock_hash: [0u8; 32],
+                input_indices: vec![0],
+                derivation: Derivation {
+                    change: 0,
+                    index: 0,
+                },
+            }],
+        };
+        core.signer().sign(&record.id, &req).await.expect("signs");
         assert_eq!(*seen.lock().expect("mutex"), vec![32, 32]);
     }
 
