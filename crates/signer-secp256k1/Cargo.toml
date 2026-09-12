@@ -14,6 +14,11 @@ workspace = true
 [dependencies]
 lantern-sdk-schema = { path = "../sdk-schema" }
 async-trait.workspace = true
+# The RFC 0019 signing message is assembled from the molecule transaction
+# itself (raw part for the transaction hash, witness slots for the stream),
+# so this crate needs the packed types. Already in the graph via
+# `lantern-sdk-schema`, whose `SigningRequest` carries a `packed::Transaction`.
+ckb-types.workspace = true
 secp256k1.workspace = true
 hmac.workspace = true
 sha2.workspace = true
@@ -23,3 +28,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 hex.workspace = true
+# Test-only: the builder's own witness placeholder, so the bytes this crate
+# signs over in a test are the bytes the builder really produces rather than
+# a second hand-rolled copy of the same layout.
+lantern-tx-builder = { path = "../tx-builder" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

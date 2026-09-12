@@ -2371,12 +2371,15 @@ version = "0.0.3"
 dependencies = [
  "async-trait",
  "ckb-hash",
+ "ckb-types",
  "hex",
  "hmac",
  "lantern-sdk-schema",
+ "lantern-tx-builder",
  "secp256k1",
  "sha2",
  "thiserror 2.0.18",
+ "tokio",
  "zeroize",
 ]
 
